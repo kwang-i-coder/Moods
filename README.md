@@ -1,4 +1,4 @@
-# 무스 (MOOS) 백엔드
+# 무스 (MOOS)
 
 ## 📍 Member
 
@@ -12,19 +12,18 @@
 
 ## 🟦 Stack
 
-| FE | ![Flutter](https://img.shields.io/badge/Flutter-02569B?style=flat&logo=flutter&logoColor=white)
-     ![Dart](https://img.shields.io/badge/Dart-0175C2?style=flat&logo=dart&logoColor=white)
-     ![Riverpod](https://img.shields.io/badge/riverpod-78C257?style=flat)
-     ![GoRouter](https://img.shields.io/badge/gorouter-02569B?style=flat)
-     ![ShellRoute](https://img.shields.io/badge/shellroute-02569B?style=flat)
-     ![Dio](https://img.shields.io/badge/dio-007AFF?style=flat)
-     ![http](https://img.shields.io/badge/http-4285F4?style=flat) |
-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| BE | ![Node.js](https://img.shields.io/badge/Node.js-339933?style=flat&logo=nodedotjs&logoColor=white)
-     ![Express](https://img.shields.io/badge/Express-000000?style=flat&logo=express&logoColor=white)
-     ![Supabase](https://img.shields.io/badge/Supabase-3ECF8E?style=flat&logo=supabase&logoColor=white)
-     ![Passport.js](https://img.shields.io/badge/passportjs-34E27A?style=flat)
-     ![JWT](https://img.shields.io/badge/JWT-000000?style=flat&logo=jsonwebtokens&logoColor=white) |
+FE ![Flutter](https://img.shields.io/badge/Flutter-02569B?style=flat&logo=flutter&logoColor=white) 
+  ![Dart](https://img.shields.io/badge/Dart-0175C2?style=flat&logo=dart&logoColor=white) 
+  ![riverpod](https://img.shields.io/badge/riverpod-78C257?style=flat) 
+  ![gorouter](https://img.shields.io/badge/gorouter-02569B?style=flat) 
+  ![shellroute](https://img.shields.io/badge/shellroute-02569B?style=flat) 
+  ![dio](https://img.shields.io/badge/dio-007AFF?style=flat)
+  
+BE ![Node.js](https://img.shields.io/badge/Node.js-339933?style=flat&logo=nodedotjs&logoColor=white) 
+  ![Express](https://img.shields.io/badge/Express-000000?style=flat&logo=express&logoColor=white) 
+  ![Supabase](https://img.shields.io/badge/Supabase-3ECF8E?style=flat&logo=supabase&logoColor=white) 
+  ![passportjs](https://img.shields.io/badge/passportjs-34E27A?style=flat) 
+  ![JWT](https://img.shields.io/badge/JWT-000000?style=flat&logo=jsonwebtokens&logoColor=white)
 
 
 
