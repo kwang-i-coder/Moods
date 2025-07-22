@@ -10,7 +10,7 @@
 | BE     | 김회광 | 기획, 레이아웃, API 구현(공부기록, 공부 통계, 사진 관리), DB 구축                                                            |
 | BE     | 정대균 | 기획, 레이아웃, API 구현(인증/회원관리, 공간 관리, 공간 피드백), DB 구축                                                                 |
 
-## 🟦 Stack
+## Stack
 
 FE ![Flutter](https://img.shields.io/badge/Flutter-02569B?style=flat&logo=flutter&logoColor=white) 
   ![Dart](https://img.shields.io/badge/Dart-0175C2?style=flat&logo=dart&logoColor=white) 
