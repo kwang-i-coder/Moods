@@ -14,6 +14,10 @@
 
 FE ![Flutter](https://img.shields.io/badge/Flutter-02569B?style=flat&logo=flutter&logoColor=white) 
   ![Dart](https://img.shields.io/badge/Dart-0175C2?style=flat&logo=dart&logoColor=white) 
+  ![Supabase](https://img.shields.io/badge/Supabase-3ECF8E?style=flat&logo=supabase&logoColor=white) 
+  ![riverpod](https://img.shields.io/badge/riverpod-78C257?style=flat) 
+  ![gorouter](https://img.shields.io/badge/gorouter-02569B?style=flat) 
+  ![dio](https://img.shields.io/badge/dio-007AFF?style=flat)
   
 BE ![Node.js](https://img.shields.io/badge/Node.js-339933?style=flat&logo=nodedotjs&logoColor=white) 
   ![Express](https://img.shields.io/badge/Express-000000?style=flat&logo=express&logoColor=white) 
