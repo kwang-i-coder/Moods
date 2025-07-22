@@ -19,7 +19,7 @@
      ![ShellRoute](https://img.shields.io/badge/shellroute-02569B?style=flat)
      ![Dio](https://img.shields.io/badge/dio-007AFF?style=flat)
      ![http](https://img.shields.io/badge/http-4285F4?style=flat) |
-|----|------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
 | BE | ![Node.js](https://img.shields.io/badge/Node.js-339933?style=flat&logo=nodedotjs&logoColor=white)
      ![Express](https://img.shields.io/badge/Express-000000?style=flat&logo=express&logoColor=white)
      ![Supabase](https://img.shields.io/badge/Supabase-3ECF8E?style=flat&logo=supabase&logoColor=white)
