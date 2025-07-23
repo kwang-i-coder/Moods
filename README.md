@@ -28,6 +28,6 @@ BE ![Node.js](https://img.shields.io/badge/Node.js-339933?style=flat&logo=nodedo
 ## 디렉토리 구조
 - lib  
 - routers
-- server.js
-- verification_page.html
- 
+- public
+  - 정적 파일 보관용 디렉터리
+- server.js 
