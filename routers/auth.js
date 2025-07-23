@@ -1,10 +1,13 @@
 import express from "express"
 import supabase from "../lib/supabaseClient.js"
 import supabaseAdmin from "../lib/supabaseAdmin.js";
+import cookieParser from "cookie-parser";
 
 const router = express.Router();
 
+router.use(cookieParser());
 router.use(express.json())
+router.use(express.urlencoded({ extended: true }));
 
 // 로그인 라우트
 router.post('/signin', async(req, res, next) => {
@@ -71,7 +74,8 @@ router.post('/signup', async(req, res)=>{
                     nickname: nickname,
                     birthday: birthday,
                     gender: gender
-                }
+                },
+                redirectTo: `${process.env.API_URL}/public/verification-page`
             }
         });
         if (error) {
@@ -107,6 +111,101 @@ router.get('/is-verified', async(req, res) => {
     return res.status(200).json({
         confirmed_at: data.user.confirmed_at? data.user.confirmed_at : null,
     });
+})
+
+// 이메일 인증 재전송 라우트
+router.get('/resend-signup-verification', async (req, res) => {
+    console.log("이메일 인증 재전송 요청:", req.query.email);
+    try {
+        const {error} = await supabase.auth.resend({
+            type: 'signup',
+            email: req.query.email,
+        })
+        if (error) {
+            console.error("이메일 인증 재전송 오류:", error);
+            return res.status(400).json({error: "이메일 인증 재전송에 실패했습니다."});
+        }
+        return res.status(200).json({message: "이메일 인증 재전송 성공"});
+    } catch (error) {
+        return res.status(500).json({error: "서버 오류"});
+    }
+})
+
+// 비밀번호 재설정 요청 라우트
+// 클라이언트는 이 라우트만 호출함
+router.get('/reset-password', async (req, res) => {
+    const email = req.query.email;
+    if (!email) {
+        return res.status(400).json({error: "이메일이 필요합니다."});
+    }
+    try {
+        const {error} = await supabase.auth.resetPasswordForEmail(email, {
+            redirectTo: `${process.env.API_URL}/auth/confirm-password-reset`
+        });
+        if (error) {
+            console.error("비밀번호 변경 요청 오류:", error);
+            return res.status(400).json({error: "비밀번호 변경 요청에 실패했습니다."});
+        }
+        return res.status(200).json({message: "변경 이메일이 전송되었습니다."});
+    } catch (error) {
+        return res.status(500).json({error: "서버 오류"});
+    }
+})
+
+// 비밀번호 재설정 확인 라우트
+// 확인 메일의 링크를 누르면 해당 라우트로 이동
+router.get('/confirm-password-reset', async (req, res) => {
+    const token_hash = req.query.token_hash;
+    const type = req.query.type;
+    const next = req.query.next;
+    const email = req.query.email;
+
+    if (!token_hash || !type || !next || !email) {
+        return res.status(400).json({error: "필요한 정보가 부족합니다."});
+    }
+
+    if(token_hash && type){
+        const {data,error} = await supabase.auth.verifyOtp({
+            token_hash: token_hash,
+            type: type,
+        })
+        if (!error) {
+            return res.cookie('Authorization', `Bearer ${data.session.access_token}`, {httpOnly: true}).cookie('Refresh', `Bearer ${data.session.refresh_token}`, {httpOnly: true}).redirect(303, `/${next.slice(1)}`)
+        }
+    }
+    
+    res.redirect(303, '/something_went_wrong.html'); // 인증 코드 오류 페이지로 리다이렉트
+})
+
+// 비밀번호 재설정 라우트
+// confirm-password-reset에서 otp인증을 한 후 재설정 페이지로 이동한다.
+// 재설정 페이지의 form에서 비밀번호를 입력하고 제출하면 이 라우트로 POST 요청이 온다.
+// 이 라우트에서 비밀번호를 재설정한다.
+router.post('/reset-password', async (req, res) => {
+    console.log(req.body)
+    const access_token = req.cookies['Authorization']?.split(' ')[1];
+    const refresh_token = req.cookies['Refresh']?.split(' ')[1];
+    await supabase.auth.setSession({refresh_token: refresh_token, access_token: access_token});
+    const new_password = req.body.password;
+
+    if (!new_password) {
+        return res.status(400).json({error: "필요한 정보가 부족합니다."});
+    }
+
+    try {
+        const { error } = await supabase.auth.updateUser({
+            password: new_password
+        });
+
+        if (error) {
+            console.error("비밀번호 변경 오류:", error);
+            return res.status(400).json({error: "비밀번호 변경에 실패했습니다."});
+        }
+
+        return res.redirect(303, '/celebrate-password-reset.html'); // 비밀번호 변경 성공 페이지로 리다이렉트
+    } catch (error) {
+        return res.status(500).json({error: "서버 오류"});
+    }
 })
 
 export default router;

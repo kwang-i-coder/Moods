@@ -11,6 +11,7 @@
   "type": "module",
   "dependencies": {
     "@supabase/supabase-js": "^2.50.4",
+    "cookie-parser": "^1.4.7",
     "dotenv": "^17.2.0",
     "express": "^5.1.0",
     "jsonwebtoken": "^9.0.2"
