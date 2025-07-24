@@ -22,12 +22,3 @@ FE ![Flutter](https://img.shields.io/badge/Flutter-02569B?style=flat&logo=flutte
 BE ![Node.js](https://img.shields.io/badge/Node.js-339933?style=flat&logo=nodedotjs&logoColor=white) 
   ![Express](https://img.shields.io/badge/Express-000000?style=flat&logo=express&logoColor=white) 
   ![Supabase](https://img.shields.io/badge/Supabase-3ECF8E?style=flat&logo=supabase&logoColor=white) 
-
-
-
-## 디렉토리 구조
-- lib  
-- routers
-- public
-  - 정적 파일 보관용 디렉터리
-- server.js 
