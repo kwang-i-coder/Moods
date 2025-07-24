@@ -11,6 +11,7 @@ router.use(express.urlencoded({ extended: true }));
 
 // 로그인 라우트
 router.post('/signin', async(req, res, next) => {
+    console.log('[라우트 호출] POST /auth/signin');
     // 요청 본문에서 이메일, 비번 받아서 검증
     const {email, password} = req.body;
     
@@ -61,6 +62,7 @@ router.post('/signin', async(req, res, next) => {
 })
 
 router.post('/signup', async(req, res)=>{
+    console.log('[라우트 호출] POST /auth/signup');
     // 요청 검증
     const { email, password, nickname, birthday, gender} = req.body;
     if (!email || !password || !nickname || !birthday || !gender) return res.status(400).send("잘못된 양식");
@@ -101,6 +103,7 @@ router.post('/signup', async(req, res)=>{
 })
 
 router.get('/is-verified', async(req, res) => {
+    console.log('[라우트 호출] GET /auth/is-verified');
     // 이메일로 사용자 테이블에서 정보 조회 (이메일 인증 여부와 프로바이더 정보 확인)
     const {data, error} = await supabaseAdmin.auth.admin.getUserById(req.query.id);
 
@@ -115,6 +118,7 @@ router.get('/is-verified', async(req, res) => {
 
 // 이메일 인증 재전송 라우트
 router.get('/resend-signup-verification', async (req, res) => {
+    console.log('[라우트 호출] GET /auth/resend-signup-verification');
     console.log("이메일 인증 재전송 요청:", req.query.email);
     try {
         const {error} = await supabase.auth.resend({
@@ -134,6 +138,7 @@ router.get('/resend-signup-verification', async (req, res) => {
 // 비밀번호 재설정 요청 라우트
 // 클라이언트는 이 라우트만 호출함
 router.get('/reset-password', async (req, res) => {
+    console.log('[라우트 호출] GET /auth/reset-password');
     const email = req.query.email;
     if (!email) {
         return res.status(400).json({error: "이메일이 필요합니다."});
@@ -155,6 +160,7 @@ router.get('/reset-password', async (req, res) => {
 // 비밀번호 재설정 확인 라우트
 // 확인 메일의 링크를 누르면 해당 라우트로 이동
 router.get('/confirm-password-reset', async (req, res) => {
+    console.log('[라우트 호출] GET /auth/confirm-password-reset');
     const token_hash = req.query.token_hash;
     const type = req.query.type;
     const next = req.query.next;
@@ -170,7 +176,10 @@ router.get('/confirm-password-reset', async (req, res) => {
             type: type,
         })
         if (!error) {
-            return res.cookie('Authorization', `Bearer ${data.session.access_token}`, {httpOnly: true}).cookie('Refresh', `Bearer ${data.session.refresh_token}`, {httpOnly: true}).redirect(303, `/${next.slice(1)}`)
+            return res
+            .cookie('Authorization', `Bearer ${data.session.access_token}`, {httpOnly: true})
+            .cookie('Refresh', `Bearer ${data.session.refresh_token}`, {httpOnly: true})
+            .redirect(303, `/${next.slice(1)}`)
         }
     }
     
@@ -182,6 +191,7 @@ router.get('/confirm-password-reset', async (req, res) => {
 // 재설정 페이지의 form에서 비밀번호를 입력하고 제출하면 이 라우트로 POST 요청이 온다.
 // 이 라우트에서 비밀번호를 재설정한다.
 router.post('/reset-password', async (req, res) => {
+    console.log('[라우트 호출] POST /auth/reset-password');
     console.log(req.body)
     const access_token = req.cookies['Authorization']?.split(' ')[1];
     const refresh_token = req.cookies['Refresh']?.split(' ')[1];
@@ -196,9 +206,15 @@ router.post('/reset-password', async (req, res) => {
         const { error } = await supabase.auth.updateUser({
             password: new_password
         });
+        
+        // 비밀번호가 기존과 같을 시 alert 띄우고 리다이렉트
+        if(error.code === "same_password") {
+            return res
+            .send(`<script>alert("기존 비밀번호와 동일합니다. 다른 비밀번호를 입력해주세요."); window.location.href = "/update_password.html";</script>`);
+        }
 
         if (error) {
-            console.error("비밀번호 변경 오류:", error);
+            console.error("비밀번호 변경 오류:", error.code);
             return res.status(400).json({error: "비밀번호 변경에 실패했습니다."});
         }
 
