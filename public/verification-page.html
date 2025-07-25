@@ -1,0 +1,115 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>이메일 확인 완료</title>
+  <style>
+    * {
+      box-sizing: border-box;
+    }
+    body {
+      font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+      background: linear-gradient(135deg, #fdfbfb, #ebedee);
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      height: 100vh;
+      margin: 0;
+      overflow: hidden;
+    }
+    .container {
+      text-align: center;
+      background: white;
+      padding: 40px;
+      border-radius: 16px;
+      box-shadow: 0 10px 25px rgba(0, 0, 0, 0.1);
+      max-width: 400px;
+    }
+    h1 {
+      font-size: 2rem;
+      margin-bottom: 1rem;
+      color: #2ecc71;
+    }
+    p {
+      font-size: 1rem;
+      color: #555;
+    }
+
+    canvas {
+      position: fixed;
+      top: 0;
+      left: 0;
+      pointer-events: none;
+      z-index: 999;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>이메일 확인 완료!</h1>
+    <p>계정 인증이 성공적으로 완료되었습니다.<br>이제 서비스를 이용하실 수 있어요.</p>
+  </div>
+
+  <canvas id="fireworks"></canvas>
+
+  <script>
+    const canvas = document.getElementById('fireworks');
+    const ctx = canvas.getContext('2d');
+    let w, h;
+    function resize() {
+      w = canvas.width = window.innerWidth;
+      h = canvas.height = window.innerHeight;
+    }
+    window.addEventListener('resize', resize);
+    resize();
+
+    let particles = [];
+
+    function createParticle(x, y) {
+      const colors = ['#ff7675', '#74b9ff', '#ffeaa7', '#55efc4', '#a29bfe'];
+      const angle = Math.random() * 2 * Math.PI;
+      const speed = Math.random() * 4 + 2;
+      return {
+        x,
+        y,
+        dx: Math.cos(angle) * speed,
+        dy: Math.sin(angle) * speed,
+        radius: Math.random() * 2 + 1,
+        life: 60,
+        color: colors[Math.floor(Math.random() * colors.length)],
+      };
+    }
+
+    function explode(x, y) {
+      for (let i = 0; i < 50; i++) {
+        particles.push(createParticle(x, y));
+      }
+    }
+
+    function animate() {
+      ctx.clearRect(0, 0, w, h);
+      particles.forEach((p, index) => {
+        p.x += p.dx;
+        p.y += p.dy;
+        p.dy += 0.05;
+        p.life--;
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, p.radius, 0, Math.PI * 2);
+        ctx.fillStyle = p.color;
+        ctx.fill();
+        if (p.life <= 0) particles.splice(index, 1);
+      });
+      requestAnimationFrame(animate);
+    }
+
+    animate();
+
+    setInterval(() => {
+      const x = Math.random() * w * 0.8 + w * 0.1;
+      const y = Math.random() * h * 0.4 + h * 0.1;
+      explode(x, y);
+    }, 1000);
+  </script>
+</body>
+</html>

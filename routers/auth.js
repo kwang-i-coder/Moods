@@ -77,7 +77,7 @@ router.post('/signup', async(req, res)=>{
                     birthday: birthday,
                     gender: gender
                 },
-                redirectTo: `${process.env.API_URL}/public/verification-page`
+                emailRedirectTo: `${process.env.API_URL}/verification-page.html`
             }
         });
         if (error) {
