@@ -5,11 +5,11 @@ const router = express.Router();
 
 // record 생성
 router.post("/", async (req, res) => {
-    const { user_id, date, content, space_name, tag_ids } = req.body;
+    const { user_id, space_id, duration, start_time, end_time, is_public = false, tag_ids } = req.body;
 
     // 필수 필드 검증
-    if (!user_id || !date || !content || !space_name) {
-        return res.status(400).json({ error: "모든 필드를 입력해야 합니다." });
+    if (!user_id || !space_id || !duration || !start_time || !end_time) {
+        return res.status(400).json({ error: "모든 필수 필드를 입력해야 합니다." });
     }
 
     if (!tag_ids || !Array.isArray(tag_ids) || tag_ids.length === 0) {
@@ -33,8 +33,15 @@ router.post("/", async (req, res) => {
 
         // 레코드 생성
         const { data: record, error: recordError } = await supabase
-            .from("records")
-            .insert({ user_id, date, content, space_name })
+            .from("study_record")
+            .insert({
+                user_id,
+                space_id,
+                duration,
+                start_time,
+                end_time,
+                is_public
+            })
             .select()
             .single();
         
@@ -54,7 +61,7 @@ router.post("/", async (req, res) => {
             
         if (tagError) {
             await supabase
-                .from("records")
+                .from("study_record")
                 .delete()
                 .eq("id", record.id);
             return res.status(500).json({ error: "태그 관계 생성에 실패했습니다.", details: tagError.message });
@@ -62,7 +69,7 @@ router.post("/", async (req, res) => {
         
         // 생성된 레코드와 태그 관계 반환
         const { data: createdRecord, error: fetchError } = await supabase
-            .from("records")
+            .from("study_record")
             .select(`
                 *,
                 record_tags (
@@ -88,61 +95,17 @@ router.post("/", async (req, res) => {
     }
 });
 
-// record 조회
+// record 조회 (사용자별, 날짜별))
 router.get("/", async (req, res) => {
     const { date, user_id } = req.query;
-
-    if (!date || !user_id) {
-        return res.status(400).json({ error: "날짜와와 사용자 ID는 필수입니다." });
-    }
-
-    // 날짜 형식 검증 (YYYY-MM-DD 또는 YYYYMMDD)
-    const dateRegex = /^\d{4}-\d{2}-\d{2}$|^\d{8}$/;
-    if (!dateRegex.test(date)) {
-        return res.status(400).json({ error: "날짜 형식이 올바르지 않습니다. (YYYY-MM-DD)" });
-    }
-
-    try {
-        const { data, error } = await supabase
-            .from("records")
-            .select(`
-                *,
-                record_tags (
-                    tag_id,
-                    tags ( id, name )
-                )
-            `)
-            .eq("user_id", user_id)
-            .eq("date", date)
-            .order("created_at", { ascending: false });
-
-        if (error) {
-            return res.status(500).json({ error: "레코드 조회에 실패했습니다.", details: error.message });
-        }
-
-        res.status(200).json({
-            message: `${date} 날짜의 기록을 조회했습니다.`,
-            count: data.length,
-            records: data
-        });
-
-    } catch (error) {
-        console.error("레코드 조회 중 오류 발생:", error);
-        res.status(500).json({ error: "서버 오류가 발생했습니다." });
-    }
-});
-
-router.get("/:id", async (req, res) => {
-    const { id } = req.params;
-    const { user_id } = req.query;
 
     if (!user_id) {
         return res.status(400).json({ error: "사용자 ID는 필수입니다." });
     }
 
     try {
-        const { data, error } = await supabase
-            .from("records")
+        let query = supabase
+            .from("study_record")
             .select(`
                 *,
                 record_tags (
@@ -150,19 +113,42 @@ router.get("/:id", async (req, res) => {
                     tags ( id, name )
                 )
             `)
-            .eq("id", id)
-            .eq("user_id", user_id)
-            .single();
+            .eq("user_id", user_id);
+
+        // 날짜 필터링
+        if (date) {
+            // 날짜 형식 검증 (YYYY-MM-DD)
+            const dateRegex = /^\d{4}-\d{2}-\d{2}$/;
+            if (!dateRegex.test(date)) {
+                return res.status(400).json({ error: "날짜 형식이 올바르지 않습니다. (YYYY-MM-DD)" });
+            }
+
+            // 해당 날짜에 시작된 기록들 조회
+            const startOfDay = `${date}T00:00:00.000Z`;
+            const endOfDay = `${date}T23:59:59.999Z`;
+            
+            query = query
+                .gte("start_time", startOfDay)
+                .lte("end_time", endOfDay);
+        }
+
+        // 스페이스 필터링
+        if (space_id) {
+            query = query.eq("space_id", space_id);
+        }
+
+        const { data, error } = await query.order("created_at", { ascending: false });
 
         if (error) {
-            if (error.code === 'PGRST116') {
-                return res.status(404).json({ error: "레코드를 찾을 수 없습니다." });
-            }
             return res.status(500).json({ error: "레코드 조회에 실패했습니다.", details: error.message });
         }
 
-        res.status(200).json({ record: data });
-
+        res.status(200).json({
+            message: "학습 기록을 조회했습니다.",
+            count: data.length,
+            records: data
+        });
+    
     } catch (error) {
         console.error("레코드 조회 중 오류 발생:", error);
         res.status(500).json({ error: "서버 오류가 발생했습니다." });
