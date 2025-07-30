@@ -113,7 +113,7 @@ router.get("/", async (req, res) => {
                     tags ( id, name )
                 )
             `)
-            .eq("user_id", user_id);
+            .setHeader("Authorization", req.headers.authorization)
 
         // 날짜 필터링
         if (date) {
