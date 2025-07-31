@@ -3,6 +3,176 @@ import supabase from "../lib/supabaseClient.js"
 
 const router = express.Router();
 
+// 공부 세션 시작
+router.post("/start", async (req, res) => {
+    const { user_id, space_id, tag_ids } = req.body;
+
+    if (!user_id || !space_id) {
+        return res.status(400).json({ error: "사용자 ID와 스페이스 ID는 필수입니다." });
+    }
+
+    if (!tag_ids || !Array.isArray(tag_ids) || tag_ids.length === 0) {
+        return res.status(400).json({ error: "최소 하나의 태그를 선택해야 합니다." });
+    }
+
+    try {
+        const { data: validTags, error: tagValidationError } = await supabase
+            .from("tags")
+            .select("id")
+            .in("id", tag_ids);
+
+        if (tagValidationError) {
+            return res.status(500).json({ error: "태그 유효성 검사에 실패했습니다." });
+        }
+
+        if (validTags.length !== tag_ids.length) {
+            return res.status(400).json({ error: "유효하지 않은 태그가 포함되어 있습니다." });
+        }
+
+        // 현재 시간으로 시작 시작 설정
+        const start_time = new Date().toISOString();
+
+        // 진행 중인 세션 생성 (임시 레코드)
+        const { data: session, error: sessionError } = await supabase
+            .from("study_sessions")
+            .insert({
+                user_id,
+                space_id,
+                start_time,
+                status: 'active' 
+            })
+            .select()
+            .single();
+
+        if (sessionError) {
+            return res.status(500).json({ error: "세션 생성에 실패했습니다.", details: sessionError.message });
+        }
+
+        res.status(201).json({
+            message: "학습 세션이 시작되었습니다.",
+            session_id: session.id,
+            start_time: session.start_time,
+        });
+
+    } catch (error) {
+        console.error("세션 시작 중 오류 발생:", error);
+        res.status(500).json({ error: "서버 오류가 발생했습니다." });
+    }
+});
+
+// 공부 세션 종류 및 레코드 생성
+router.post("/complete/:session_id", async (req, res) => {
+    const { session_id } = req.params;
+    const { user_id, is_public = false } = req.body;
+
+    if (!user_id) {
+        return res.status(400).json({ error: "사용자 ID는 필수입니다." });
+    }
+
+    try {
+        // 활성 세션 조회
+        const { data: session, error: sessionError } = await supabase
+            .from("study_sessions")
+            .select(`
+                *,
+                session_tags (
+                    tag_id
+                )
+            `)
+            .eq("id", session_id)
+            .eq("user_id", user_id)
+            .eq("status", 'active')
+            .single();
+
+        if (sessionError || !session) {
+            return res.status(404).json({ error: "해당 세션을 찾을 수 없습니다." });
+        }
+
+        // 현재 시간으로 세션 종료 시간 설정
+        const end_time = new Date().toISOString();
+        const start_time = session.start_time;
+
+        // 공부 시간 계산 (분 단위)
+        const duration = Math.round((new Date(end_time) - new Date(start_time)) / 60000); 
+
+        // 최소 공부 시간 체크 (예: 1분 이상)
+        if (duration < 1) {
+            return res.status(400).json({ error: "최소 1분 이상 공부해야 합니다." });
+        }
+
+        const tag_ids = JSON.parse(session.tag_ids); // 임시로 저장된 태그 ID 가져오기
+
+        // 레코드 생성
+        const { data: record, error: recordError } = await supabase
+            .from("study_record")
+            .insert({
+                user_id,
+                space_id: session.space_id,
+                duration,
+                start_time,
+                end_time,
+                is_public
+            })
+            .select()
+            .single();
+        
+        if (recordError) {
+            return res.status(500).json({ error: "레코드 생성에 실패했습니다.", details: recordError.message });
+        }
+
+        // 태그 관계 생성
+        const tagRelations = tag_ids.map(tag_id => ({
+            record_id: record.id,
+            tag_id
+        }));
+
+        const { error: tagError } = await supabase
+            .from("record_tags")
+            .insert(tagRelations);
+            
+        if (tagError) {
+            await supabase
+                .from("study_record")
+                .delete()
+                .eq("id", record.id);
+            return res.status(500).json({ error: "태그 관계 생성에 실패했습니다.", details: tagError.message });
+        }
+        
+        // 세션 상태 업데이트
+        await supabase
+            .from("study_sessions")
+            .update({ status: 'completed' })
+            .eq("id", session_id);
+
+        // 생성된 레코드와 태그 관계 반환
+        const { data: createdRecord, error: fetchError } = await supabase
+            .from("study_record")
+            .select(`
+                *,
+                record_tags (
+                    tag_id,
+                    tags ( id, name )
+                )
+            `)
+            .eq("id", record.id)
+            .single();
+
+        if (fetchError) {
+            return res.status(500).json({ error: "레코드 정보를 가져오는 데 실패했습니다." });
+        }
+
+        res.status(201).json({
+            message: "공부 세션이 완료되었습니다.",
+            record: createdRecord
+        });
+
+    } catch (error) {
+        console.error("세션 완료 중 오류 발생:", error);
+        res.status(500).json({ error: "서버 오류가 발생했습니다." });
+    }
+});
+ 
+
 // record 생성
 router.post("/", async (req, res) => {
     const { user_id, space_id, duration, start_time, end_time, is_public = false, tag_ids } = req.body;
