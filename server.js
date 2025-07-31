@@ -5,6 +5,7 @@ import "./lib/env.js"
 // 라우터 모듈 불러오기
 import auth_router from "./routers/auth.js";    
 import user_router from "./routers/user.js";
+import space_router from "./routers/space.js";
 
 
 
@@ -19,6 +20,7 @@ app.patch("*splat", express.json());
 // 라우터 설정
 app.use('/auth', auth_router);
 app.use('/user', user_router);
+app.use('/spaces', space_router);
 
 app.get("/", (req, res) => {
     res.send("this is root page");
