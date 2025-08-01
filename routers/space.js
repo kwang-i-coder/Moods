@@ -1,9 +1,7 @@
 import express from "express"
 import supabase from "../lib/supabaseClient.js"
 import verifySupabaseJWT from "../lib/verifyJWT.js";
-import supabaseAdmin from "../lib/supabaseAdmin.js";
 import fetch from "node-fetch";
-
 const router = express.Router();
 
 router.use(express.json());
@@ -144,6 +142,30 @@ router.get('/detail', async (req, res) => {
     }
     return res.status(200).json(response_data);
 })
+
+router.get('/visited', verifySupabaseJWT, async (req, res) => {
+    console.log('[라우트 호출] GET /spaces/visited');
+    const {from, to} = req.query;
+    try {
+        // 사용자 공부 기록에서 방문한 장소 조회
+        const {data, error} = await supabase
+            .from('visited_spaces')
+            .select('space_id')
+            .gte('recent_visit', from)
+            .lte('recent_visit', to)
+            .setHeader('Authorization', req.headers.authorization);
+        if (error) {
+            return res.status(400).json({ error: error.message });
+        }
+        res.json({
+            success: true,
+            visited_spaces: data.map(item => item.space_id)
+        });
+    } catch (error) {
+        console.error("방문 장소 조회 오류:", error);
+        return res.status(500).json({error: "서버 오류"});
+    }
+});
 
 export default router;
 
