@@ -9,6 +9,7 @@ import space_router from "./routers/space.js";
 
 
 import record_router from "./routers/record.js";
+import feedback_router from "./routers/feedback.js";
 
 const app = express();
 
@@ -24,6 +25,7 @@ app.use('/auth', auth_router);
 app.use('/user', user_router);
 app.use('/spaces', space_router);
 app.use('/record', record_router);
+app.use('/feedback', feedback_router);
 
 app.get("/", (req, res) => {
     res.send("this is root page");
