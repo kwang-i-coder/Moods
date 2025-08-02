@@ -6,6 +6,7 @@ import "./lib/env.js"
 import auth_router from "./routers/auth.js";    
 import user_router from "./routers/user.js";
 import record_router from "./routers/record.js";
+import feedback_router from "./routers/feedback.js";
 
 const app = express();
 
@@ -20,6 +21,7 @@ app.patch("*splat", express.json());
 app.use('/auth', auth_router);
 app.use('/user', user_router);
 app.use('/record', record_router);
+app.use('/feedback', feedback_router);
 
 app.get("/", (req, res) => {
     res.send("this is root page");
