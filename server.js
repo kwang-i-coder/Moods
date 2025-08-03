@@ -6,12 +6,13 @@ import "./lib/env.js"
 import auth_router from "./routers/auth.js";    
 import user_router from "./routers/user.js";
 import space_router from "./routers/space.js";
-
+import session_router from "./routers/study-sessions.js";
 
 import record_router from "./routers/record.js";
 import feedback_router from "./routers/feedback.js";
 
 const app = express();
+
 
 // 정적 파일 제공을 위한 미들웨어
 app.use(express.static('public'))
@@ -26,6 +27,7 @@ app.use('/user', user_router);
 app.use('/spaces', space_router);
 app.use('/record', record_router);
 app.use('/feedback', feedback_router);
+app.use('/study-sessions', session_router);
 
 app.get("/", (req, res) => {
     res.send("this is root page");

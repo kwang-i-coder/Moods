@@ -1,14 +1,15 @@
 import express from "express";
 import supabaseAdmin from "../lib/supabaseAdmin.js";
 import supabase from "../lib/supabaseClient.js"
+import verifySupabaseJWT from "../lib/verifyJWT.js";
 
 const router = express.Router();
 
 // 공부 세션 시작
-router.post("/start", async (req, res) => {
-    const { user_id, space_id } = req.body; 
-    if (!user_id || !space_id) {
-        return res.status(400).json({ error: "사용자 ID와 스페이스 ID는 필수입니다." });
+router.post("/start", verifySupabaseJWT,async (req, res) => {
+    const {space_id} = req.body; 
+    if (!space_id) {
+        return res.status(400).json({ error: "space_id는 필수입니다." });
     }
     try {
         // 현재 시간으로 시작 시작 설정
