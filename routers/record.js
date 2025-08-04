@@ -5,44 +5,6 @@ import verifySupabaseJWT from "../lib/verifyJWT.js";
 
 const router = express.Router();
 
-// record 생성
-router.post("/records", async (req, res) => {
-    const { user_id, space_id, start_time, end_time, duration, is_public = false } = req.body;
-
-    // 필수 필드 검증
-    if (!user_id || !space_id || !start_time || !end_time || duration == null) {
-        return res.status(400).json({ error: "모든 필수 필드를 입력해야 합니다." });
-    }
-
-    try {
-        // 레코드 생성
-        const { data: record, error: recordError } = await supabase
-            .from("study_record")
-            .insert({
-                user_id,
-                space_id,
-                duration,
-                start_time,
-                end_time,
-                is_public
-            })
-            .select()
-            .single();
-        
-        if (recordError) {
-            return res.status(500).json({ error: "레코드 생성에 실패했습니다.", details: recordError.message });
-        }
-
-        return res.status(201).json({ 
-            message: "레코드가 생성되었습니다.",
-            record 
-        });
-    } catch (error) {
-        console.error("레코드 생성 중 오류 발생:", error);
-        return res.status(500).json({ error: "서버 오류가 발생했습니다." });
-    }
-});
-
 // record 조회 (사용자별, 날짜별))
 router.get("/records", async (req, res) => {
     const { date, user_id, space_id } = req.query;
