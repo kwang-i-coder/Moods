@@ -2,6 +2,7 @@ import express from 'express'
 import supabase from '../lib/supabaseClient.js'
 import redisClient from '../lib/redisClient.js'
 import verifySupabaseJWT from '../lib/verifyJWT.js'
+import { v4 as uuidv4 } from "uuid";
 
 const router = express.Router()
 
@@ -153,6 +154,79 @@ router.get('/quit', verifySupabaseJWT, async (req, res) => {
     const redis_key = `sessions:${req.user.sub}`;
     await redisClient.del(redis_key);
     res.status(200).json({success:true})
+});
+
+router.post('/session-to-record', verifySupabaseJWT, async (req, res) => {
+    const {is_public=false, tags} = req.body;
+    const redis_key = `sessions:${req.user.sub}`;
+    const session = await redisClient.hGetAll(redis_key);
+
+    if(Object.keys(session).length === 0){
+        console.log(`세션이 존재하지 않음: ${redis_key}`);
+        return res.status(400).send('세션 없음');
+    };
+
+    if(session.status !== "finished"){
+        console.log(`세션이 종료되지 않음: ${redis_key}`);
+        return res.status(400).send('종료되지 않은 세션');
+    }
+
+    const start_time = new Date(session.start_time);
+    const end_time = new Date(session.end_time);
+    const duration = Math.floor((end_time.getTime() - start_time.getTime())/1000) - Number(session.accumulatedPauseSeconds||0);
+    const data = {
+        user_id: req.user.sub,
+        space_id: session.space_id,
+        duration: duration,
+        start_time: start_time.toISOString(),
+        end_time: end_time.toISOString(),
+        is_public: is_public
+    };
+    
+    const {data:record_data} = await supabase.from('study_record').insert(data).setHeader('Authorization', req.headers.authorization).select();
+    
+    if(tags.length > 0){
+        const {data: existing_tags, error} = await supabase
+        .from('tags')
+        .select('*')
+        .in('tag', tags)
+        .setHeader('Authorization', req.headers.authorization);
+
+        var tag_hash = {}
+        for(const existing_tag of existing_tags){
+            tag_hash[existing_tag.tag] = existing_tag.id;
+        }
+        
+        if(error){
+            res.status(500).send('supabase select error');
+        };
+        var tag_table = [];
+
+        for(const tag of tags){
+            tag_table.push({
+                id: tag_hash[tag]||uuidv4(),
+                tag: tag
+            });
+        }
+
+        const {error:upsert_error} = await supabase.from('tags').upsert(tag_table).setHeader('Authorization', req.headers.authorization);
+        if(upsert_error){
+            console.log(upsert_error.message);
+            return res.status(500).send(`upsert error`);
+        }
+        
+        var data_for_recordtag = [];
+        for(const tag of tag_table){
+            data_for_recordtag.push({record_id: record_data[0].id, tag_id: tag.id})
+        }
+        const {error:recordtag_error} = await supabase.from('record_tag').insert(data_for_recordtag).setHeader('Authorization', req.headers.authorization);
+        if(recordtag_error){
+            console.log(recordtag_error.message);
+            return res.status(500).send(`record_tag table error: ${recordtag_error.message}`);
+        }
+    }
+
+    return res.status(200).json({success: true, data: data});
 })
 
 export default router;
