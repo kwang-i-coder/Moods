@@ -226,6 +226,7 @@ router.post('/session-to-record', verifySupabaseJWT, async (req, res) => {
         }
     }
 
+    await redisClient.del(redis_key);
     return res.status(200).json({success: true, data: data});
 })
 
