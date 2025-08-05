@@ -7,7 +7,7 @@ const router = express.Router();
 router.use(verifySupabaseJWT);
 
 // record 조회 (사용자별, 날짜별))
-router.get("/records", async (req, res) => {
+router.get("/records", verifySupabaseJWT, async (req, res) => {
     const { date, user_id, space_id } = req.query;
     if (!user_id) {
         return res.status(400).json({ error: "사용자 ID는 필수입니다." });

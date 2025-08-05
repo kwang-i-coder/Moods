@@ -20,6 +20,8 @@ app.use(express.static('public'))
 // post, patch에 대해 JSON 파싱 미들웨어 사용
 app.post("*splat",express.json());
 app.patch("*splat", express.json());
+app.use(express.json()); // 전역 JSON 파서로 적용 (모든 POST/PUT/PATCH 요청에 필요)
+
 
 // 라우터 설정
 app.use('/auth', auth_router);
