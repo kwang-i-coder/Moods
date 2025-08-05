@@ -64,7 +64,7 @@ router.get("/records/:id", verifySupabaseJWT, async (req, res) => {
     const { id } = req.params;
 
     try {
-        const { data, error } = await supabaseAdmin
+        const { data, error } = await supabase
             .from("study_record")
             .select("*")
             .eq("id", id)
