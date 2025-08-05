@@ -37,10 +37,9 @@ router.get('/start', verifySupabaseJWT, async (req, res) => {
         start_time: start_time,
         status: 'active',
         accumulatedPauseSeconds: '0',
-        duration: '0'
     });
     console.log(`세션 등록 완료: ${await redisClient.hGet(redis_key, 'user_id')}`)
-    return res.status(200).json({success: true, start_time: start_time, duration: 0});
+    return res.status(200).json({success: true, start_time: start_time});
 })
 
 // 공부 세션 일시 정지
@@ -61,14 +60,20 @@ router.get('/pause', verifySupabaseJWT, async (req, res) => {
     }
 
     const last_paused_at = new Date().toISOString();
-    const duration = calculate_duration(session.start_time, last_paused_at, Number(session.accumulatedPauseSeconds||0));
+    const accumulatedPauseSeconds =  Number(session.accumulatedPauseSeconds||0)
+    const duration = calculate_duration(session.start_time, last_paused_at, accumulatedPauseSeconds);
     await redisClient.hSet(redis_key, {
         last_paused_at: last_paused_at,
         status: 'paused',
         duration: duration
     });
     console.log(`일시 정지 성공: ${redis_key}`);
-    return res.status(200).json({success: true, last_paused_at: last_paused_at, duration: duration});
+    return res.status(200).json({
+        success: true, 
+        last_paused_at: last_paused_at, 
+        accumulatedPauseSeconds: accumulatedPauseSeconds,
+        duration: duration
+    });
 })
 
 // 공부 세션 재개
@@ -104,7 +109,6 @@ router.get('/resume', verifySupabaseJWT, async (req, res) => {
         success: true,
         resume_at: resume_at.toISOString(),
         accumulatedPauseSeconds: accumulatedPauseSeconds,
-        duration: duration
     });
 });
 
