@@ -96,7 +96,7 @@ router.get('/resume', verifySupabaseJWT, async (req, res) => {
 
     const last_paused_at = new Date(session.last_paused_at);
     const resume_at = new Date();
-    const accumulatedPauseSeconds = Number(session.accumulatedPauseSeconds || 0) + Math.floor((resume_at.getTime() - last_paused_at.getTime()) / 1000);
+    const accumulatedPauseSeconds = Number(session.accumulatedPauseSeconds || 0) + ((resume_at.getTime() - last_paused_at.getTime()) / 1000);
     const duration = calculate_duration(session.start_time, resume_at.toISOString(), accumulatedPauseSeconds);
 
     await redisClient.hSet(redis_key, {
@@ -136,7 +136,7 @@ router.get('/finish', verifySupabaseJWT, async (req, res) => {
     // 일시정지된 세션에서 바로 종료하는 경우
     if(session.status === 'paused'){
         const last_paused_at = new Date(session.last_paused_at);
-        const accumulatedPauseSeconds = Number(session.accumulatedPauseSeconds||0) + Math.floor((stopped_at.getTime() - last_paused_at.getTime())/1000);
+        const accumulatedPauseSeconds = Number(session.accumulatedPauseSeconds||0) + ((stopped_at.getTime() - last_paused_at.getTime())/1000);
         await redisClient.hSet(redis_key, {accumulatedPauseSeconds: accumulatedPauseSeconds});
         session = await redisClient.hGetAll(redis_key);
         console.log(`일시정지 상태에서 바로 종료: ${redis_key}`);
@@ -251,7 +251,7 @@ router.post('/session-to-record', verifySupabaseJWT, async (req, res) => {
 function calculate_duration(start_time, end_time, accumulatedPauseSeconds) {
     const end = new Date(end_time);
     const start = new Date(start_time);
-    const duration = Math.floor((end.getTime() - start.getTime()) / 1000) - accumulatedPauseSeconds;
+    const duration = ((end.getTime() - start.getTime()) / 1000) - accumulatedPauseSeconds;
     return duration;
 }
 
