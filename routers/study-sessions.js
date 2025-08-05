@@ -36,10 +36,11 @@ router.get('/start', verifySupabaseJWT, async (req, res) => {
         space_id: space_id,
         start_time: start_time,
         status: 'active',
-        accumulatedPauseSeconds: '0'
+        accumulatedPauseSeconds: '0',
+        duration: '0'
     });
     console.log(`세션 등록 완료: ${await redisClient.hGet(redis_key, 'user_id')}`)
-    return res.status(200).json({success: true, start_time: start_time});
+    return res.status(200).json({success: true, start_time: start_time, duration: 0});
 })
 
 // 공부 세션 일시 정지
@@ -60,13 +61,14 @@ router.get('/pause', verifySupabaseJWT, async (req, res) => {
     }
 
     const last_paused_at = new Date().toISOString();
+    const duration = calculate_duration(session.start_time, last_paused_at, Number(session.accumulatedPauseSeconds||0));
     await redisClient.hSet(redis_key, {
         last_paused_at: last_paused_at,
-        status: 'paused'
+        status: 'paused',
+        duration: duration
     });
     console.log(`일시 정지 성공: ${redis_key}`);
-    return res.status(200).json({success: true, last_paused_at: last_paused_at});
-
+    return res.status(200).json({success: true, last_paused_at: last_paused_at, duration: duration});
 })
 
 // 공부 세션 재개
@@ -89,18 +91,20 @@ router.get('/resume', verifySupabaseJWT, async (req, res) => {
 
     const last_paused_at = new Date(session.last_paused_at);
     const resume_at = new Date();
-    const duration = Math.floor((resume_at.getTime() - last_paused_at.getTime()) / 1000);
-    const accumulatedPauseSeconds = Number(session.accumulatedPauseSeconds || 0) + duration;
+    const accumulatedPauseSeconds = Number(session.accumulatedPauseSeconds || 0) + Math.floor((resume_at.getTime() - last_paused_at.getTime()) / 1000);
+    const duration = calculate_duration(session.start_time, resume_at.toISOString(), accumulatedPauseSeconds);
 
     await redisClient.hSet(redis_key, {
         status: 'active',
-        accumulatedPauseSeconds: accumulatedPauseSeconds
+        accumulatedPauseSeconds: accumulatedPauseSeconds,
+        duration: duration
     });
 
     res.status(200).json({
         success: true,
         resume_at: resume_at.toISOString(),
-        accumulatedPauseSeconds: accumulatedPauseSeconds
+        accumulatedPauseSeconds: accumulatedPauseSeconds,
+        duration: duration
     });
 });
 
@@ -109,7 +113,7 @@ router.get('/finish', verifySupabaseJWT, async (req, res) => {
     console.log('[라우트 호출] /study-sessions/finish')
 
     const redis_key = `sessions:${req.user.sub}`;
-    const session = await redisClient.hGetAll(redis_key);
+    var session = await redisClient.hGetAll(redis_key);
 
     // 세션을 시작도 안했을 경우
     if (Object.keys(session).length === 0) {
@@ -128,19 +132,22 @@ router.get('/finish', verifySupabaseJWT, async (req, res) => {
     // 일시정지된 세션에서 바로 종료하는 경우
     if(session.status === 'paused'){
         const last_paused_at = new Date(session.last_paused_at);
-        const duration = Math.floor((stopped_at.getTime() - last_paused_at.getTime())/1000);
-        const accumulatedPauseSeconds = Number(session.accumulatedPauseSeconds||0) + duration;
+        const accumulatedPauseSeconds = Number(session.accumulatedPauseSeconds||0) + Math.floor((stopped_at.getTime() - last_paused_at.getTime())/1000);
         await redisClient.hSet(redis_key, {accumulatedPauseSeconds: accumulatedPauseSeconds});
+        session = await redisClient.hGetAll(redis_key);
         console.log(`일시정지 상태에서 바로 종료: ${redis_key}`);
     };
+    // 공부시간 계산
+    const duration = calculate_duration(session.start_time, stopped_at.toISOString(), Number(session.accumulatedPauseSeconds));
 
     await redisClient.hSet(redis_key, {
         status: 'finished',
-        end_time: stopped_at.toISOString()
+        end_time: stopped_at.toISOString(),
+        duration: duration
     });
 
     console.log(`세션 종료됨: ${redis_key}`);
-    return res.status(200).json({success: true, end_time: stopped_at.toISOString()});
+    return res.status(200).json({success: true, end_time: stopped_at.toISOString(), duration: duration});
 });
 
 router.get('/user-session', verifySupabaseJWT, async (req, res) => {
@@ -173,7 +180,7 @@ router.post('/session-to-record', verifySupabaseJWT, async (req, res) => {
 
     const start_time = new Date(session.start_time);
     const end_time = new Date(session.end_time);
-    const duration = Math.floor((end_time.getTime() - start_time.getTime())/1000) - Number(session.accumulatedPauseSeconds||0);
+    const duration = Number(session.duration);
     const data = {
         user_id: req.user.sub,
         space_id: session.space_id,
@@ -183,7 +190,11 @@ router.post('/session-to-record', verifySupabaseJWT, async (req, res) => {
         is_public: is_public
     };
     
-    const {data:record_data} = await supabase.from('study_record').insert(data).setHeader('Authorization', req.headers.authorization).select();
+    const {data:record_data, error: record_error} = await supabase.from('study_record').insert(data).setHeader('Authorization', req.headers.authorization).select();
+    if(record_error){
+        console.log(record_error.message);
+        return res.status(500).send(record_error.message);
+    }
     
     if(tags.length > 0){
         const {data: existing_tags, error} = await supabase
@@ -210,6 +221,7 @@ router.post('/session-to-record', verifySupabaseJWT, async (req, res) => {
         }
 
         const {error:upsert_error} = await supabase.from('tags').upsert(tag_table).setHeader('Authorization', req.headers.authorization);
+
         if(upsert_error){
             console.log(upsert_error.message);
             return res.status(500).send(`upsert error`);
@@ -229,5 +241,14 @@ router.post('/session-to-record', verifySupabaseJWT, async (req, res) => {
     await redisClient.del(redis_key);
     return res.status(200).json({success: true, data: data});
 })
+
+
+// 공부 시간 계산 함수
+function calculate_duration(start_time, end_time, accumulatedPauseSeconds) {
+    const end = new Date(end_time);
+    const start = new Date(start_time);
+    const duration = Math.floor((end.getTime() - start.getTime()) / 1000) - accumulatedPauseSeconds;
+    return duration;
+}
 
 export default router;
