@@ -4,6 +4,7 @@ import supabase from "../lib/supabaseClient.js"
 import verifySupabaseJWT from "../lib/verifyJWT.js";
 
 const router = express.Router();
+router.use(verifySupabaseJWT);
 
 // record 조회 (사용자별, 날짜별))
 router.get("/records", async (req, res) => {
@@ -59,25 +60,29 @@ router.get("/records", async (req, res) => {
 });
 
 // 단일 record 조회
-router.get("/records/:id", async (req, res) => {
+router.get("/records/:id", verifySupabaseJWT, async (req, res) => {
     const { id } = req.params;
-    const { user_id } = req.query;
-    if (!user_id) {
-        return res.status(400).json({ error: "사용자 ID는 필수입니다." });
-    }
 
     try {
         const { data, error } = await supabaseAdmin
             .from("study_record")
             .select("*")
             .eq("id", id)
-            .eq("user_id", user_id)
-            .single();
+            .setHeader('Authorization', req.headers.authorization)
 
         if (error) {
-            return res.status(404).json({ error: "레코드를 찾을 수 없습니다.", details: error.message });
+            return res.status(400).json({ error: error.message });
         }
-        return res.status(200).json({ record: data });
+
+        // data가 빈 배열인지 확인
+        if (!data || data.length === 0) {
+            return res.status(404).json({ error: "레코드를 찾을 수 없습니다." });
+        }
+
+        return res.status(200).json({ 
+            message: "레코드 조회에 성공했습니다.",
+            record: data[0] 
+        });
     } catch (err) {
         console.error(err);
         return res.status(500).json({ error: "서버 오류" });
@@ -85,21 +90,18 @@ router.get("/records/:id", async (req, res) => {
 });
 
 // record 수정
-router.put("/records/:id", async (req, res) => {
+router.put("/records/:id", verifySupabaseJWT, async (req, res) => {
     const { id } = req.params;
-    const { user_id, space_id, duration, start_time, end_time, is_public } = req.body;
-    if (!user_id) {
-        return res.status(400).json({ error: "사용자 ID는 필수입니다." });
-    }
+    const { space_id, duration, start_time, end_time, is_public } = req.body;
 
     try {
         // 먼저 레코드가 존재하는지 확인
-        const { data: existingRecord, error: checkError } = await supabaseAdmin
+        const { data: existingRecord, error: checkError } = await supabase
             .from("study_record")
             .select()
             .eq("id", id)
-            .eq("user_id", user_id)
-            .single();
+            .setHeader('Authorization', req.headers.authorization)
+
         if (checkError || !existingRecord) {
             return res.status(404).json({ error: "해당 레코드를 찾을 수 없습니다." });
         }
@@ -112,13 +114,18 @@ router.put("/records/:id", async (req, res) => {
         if (duration != null) updateData.duration = duration;
         if (is_public != null) updateData.is_public = is_public;
 
+        // 업데이트할 필드가 없으면 에러
+        if (Object.keys(updateData).length === 0) {
+            return res.status(400).json({ error: "수정할 필드가 없습니다." });
+        }
+
         // 레코드 업데이트
         const { data: updatedRecord, error: updateError } = await supabaseAdmin
             .from("study_record")
             .update(updateData)
             .eq("id", id)
             .select()
-            .single();
+            .setHeader('Authorization', req.headers.authorization)
         
         if (updateError) {
             return res.status(500).json({ error: "레코드 수정 실패.", details: updateError.message });
@@ -131,21 +138,17 @@ router.put("/records/:id", async (req, res) => {
 });
         
 // record 삭제
-router.delete("/records/:id", async (req, res) => {
+router.delete("/records/:id", verifySupabaseJWT, async (req, res) => {
     const { id } = req.params;
-    const { user_id } = req.query;
-    if (!user_id) {
-        return res.status(400).json({ error: "사용자 ID는 필수입니다." });
-    }
 
     try {
         // 기존 레코드 확인
-        const { data: existingRecord, error: checkError } = await supabaseAdmin
+        const { data: existingRecord, error: checkError } = await supabase
             .from("study_record")
             .select()
             .eq("id", id)
-            .eq("user_id", user_id)
-            .single();
+            .setHeader('Authorization', req.headers.authorization)
+            
         if (checkError || !existingRecord) {
             return res.status(404).json({ error: "해당 레코드를 찾을 수 없습니다." });
         }
@@ -155,6 +158,7 @@ router.delete("/records/:id", async (req, res) => {
             .from("study_record")
             .delete()
             .eq("id", id)
+
         if (deleteError) {
             return res.status(500).json({ error: "레코드 삭제에 실패했습니다.", details: deleteError.message });
         }
