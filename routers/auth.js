@@ -2,6 +2,10 @@ import express from "express"
 import supabase from "../lib/supabaseClient.js"
 import supabaseAdmin from "../lib/supabaseAdmin.js";
 import cookieParser from "cookie-parser";
+import { v4 as uuidv4 } from "uuid";
+import e from "express";
+
+
 
 const router = express.Router();
 
@@ -61,45 +65,68 @@ router.post('/signin', async(req, res, next) => {
     }
 })
 
-router.post('/signup', async(req, res)=>{
-    console.log('[라우트 호출] POST /auth/signup');
+router.post('/send-verification', async(req, res)=>{
+    console.log('[라우트 호출] POST /auth/send-verification');
     // 요청 검증
-    const { email, password, nickname, birthday, gender} = req.body;
-    if (!email || !password || !nickname || !birthday || !gender) return res.status(400).send("잘못된 양식");
+    const { email } = req.body;
+    if (!email) return res.status(400).send("잘못된 양식");
+    const password = generateRandomPassword();
     try {
         // 회원가입 호출 (추가 정보 저장)
         const { data, error } = await supabase.auth.signUp({
             email,
             password,
             options: {
-                data: {
-                    nickname: nickname,
-                    birthday: birthday,
-                    gender: gender
-                },
                 emailRedirectTo: `${process.env.API_URL}/verification-page.html`
             }
         });
         if (error) {
-            console.error("회원가입 오류:", error);
+            console.error("메일 전송 오류:", error);
             return res.status(400).json({ error: error.message });
         }
         if (!data || !data.user) {
-            return res.status(500).json({ error: "회원가입 처리 중 오류가 발생했습니다." });
+            return res.status(500).json({ error: "인증메일 전송 오류가 발생했습니다." });
         }
         // 성공 응답
         return res.status(201).json({
-            message: "회원가입 성공",
+            message: "인증 메일 전송 성공",
             user: {
                 id: data.user.id,
                 email: email,
-                nickname: nickname,
                 created_at: data.user.created_at,
             }
         });
     } catch (error) {
         return res.status(500).json({ error: "서버 오류" });
     }
+})
+
+router.post('/signup', async (req, res) => {
+    console.log('[라우트 호출] POST /auth/signup');
+    const {user_id ,password, nickname, birthday, gender} = req.body;
+    if(!user_id||!password||!nickname||!birthday||!gender){
+        return res.status(400).send("잘못된 양식");
+    };
+    try{
+        const {data, error: update_error}= await supabaseAdmin.auth.admin.updateUserById(
+            user_id,
+            {
+                password: password,
+                user_metadata: {
+                    nickname: nickname,
+                    birthday: birthday,
+                    gender: gender
+                }
+            }
+        )
+        if(update_error){
+            return res.status(500).send(`비밀번호 설정 에러: ${update_error.message}`)
+        }
+        return res.status(200).json({message: "회원가입 성공", user_id: data.user.id, email: data.user.email})
+    }catch(error){
+        return res.status(500).send(`서버 에러: ${error}`)
+    }
+
 })
 
 router.get('/is-verified', async(req, res) => {
@@ -224,4 +251,25 @@ router.post('/reset-password', async (req, res) => {
     }
 })
 
+function generateRandomPassword(length = 12, includeUppercase = true, includeNumbers = true, includeSymbols = true) {
+  const lowercaseChars = "abcdefghijklmnopqrstuvwxyz";
+  const uppercaseChars = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+  const numberChars = "0123456789";
+  const symbolChars = "!@#$%^&*()-_=+[]{}|;:,.<>?";
+
+  let allChars = lowercaseChars;
+  if (includeUppercase) allChars += uppercaseChars;
+  if (includeNumbers) allChars += numberChars;
+  if (includeSymbols) allChars += symbolChars;
+
+  let password = "";
+  for (let i = 0; i < length; i++) {
+    const randomIndex = Math.floor(Math.random() * allChars.length);
+    password += allChars[randomIndex];
+  }
+  return password;
+}
+
+
 export default router;
+
