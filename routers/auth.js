@@ -65,6 +65,50 @@ router.post('/signin', async(req, res, next) => {
     }
 })
 
+router.post('/signin_kakao', async (req, res) => {
+    const {kakao_token} = req.body;
+    if(!kakao_token){
+        return res.status(400).send('토큰 누락')
+    }
+    try {
+        const { data, error } = await supabase.auth.signInWithIdToken({
+            provider: 'kakao',
+            token: kakao_token
+            });
+        if(error){
+            return res.status(500).send(`signIn error: ${error.message}`)
+        }
+        const {data: userData, error: userError} = await supabase
+            .from('users')
+            .select('nickname')
+            .eq('id', data.user.id)
+            .single()
+            .setHeader('Authorization', `Bearer ${data.session.access_token}`);
+
+        if(userError){
+            return res.status(500).send(`userData error: ${userError.message}`)
+        }
+
+        return res.status(200).json({
+            message: '로그인 성공',
+            session: {
+                access_token: data.session.access_token,
+                refresh_token: data.session.refresh_token,
+                expires_at: data.session.expires_at,
+                user: {
+                    id: data.user.id,
+                    email: data.user.email,
+                    nickname: userData.nickname,
+                    created_at: data.user.created_at,
+                }
+            }
+        })
+    } catch (error) {
+        return res.status(500).send(`signIn error: ${error.message}`)
+    }
+})
+
+
 router.post('/send-verification', async(req, res)=>{
     console.log('[라우트 호출] POST /auth/send-verification');
     // 요청 검증
