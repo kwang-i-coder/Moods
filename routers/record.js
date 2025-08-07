@@ -8,6 +8,7 @@ router.use(verifySupabaseJWT);
 
 // record 조회 (사용자별, 날짜별))
 router.get("/records", verifySupabaseJWT, async (req, res) => {
+    console.log('[라우트 호출] GET /record/records');
     const { date, user_id, space_id } = req.query;
     if (!user_id) {
         return res.status(400).json({ error: "사용자 ID는 필수입니다." });
@@ -61,6 +62,7 @@ router.get("/records", verifySupabaseJWT, async (req, res) => {
 
 // 기록 캘린더: 특정 연도/월에 해당하는 기록 전체 조회
 router.get("/records/calendar", verifySupabaseJWT, async (req, res) => {
+    console.log('[라우트 호출] GET /record/records/calendar');
     const { year, month } = req.query;
 
     // year, month 필수
@@ -116,6 +118,7 @@ router.get("/records/calendar", verifySupabaseJWT, async (req, res) => {
 
 // 단일 record 조회
 router.get("/records/:id", verifySupabaseJWT, async (req, res) => {
+    console.log('[라우트 호출] GET /record/records:id');
     const { id } = req.params;
 
     try {
@@ -146,6 +149,7 @@ router.get("/records/:id", verifySupabaseJWT, async (req, res) => {
 
 // record 수정
 router.put("/records/:id", verifySupabaseJWT, async (req, res) => {
+    console.log('[라우트 호출] PUT /record/records:id');
     const { id } = req.params;
     const { space_id, duration, start_time, end_time, is_public } = req.body;
 
@@ -194,6 +198,7 @@ router.put("/records/:id", verifySupabaseJWT, async (req, res) => {
         
 // record 삭제
 router.delete("/records/:id", verifySupabaseJWT, async (req, res) => {
+    console.log('[라우트 호출] DELETE /record/records:id');
     const { id } = req.params;
 
     try {
