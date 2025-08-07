@@ -59,6 +59,61 @@ router.get("/records", verifySupabaseJWT, async (req, res) => {
     }
 });
 
+// 기록 캘린더: 특정 연도/월에 해당하는 기록 전체 조회
+router.get("/records/calendar", verifySupabaseJWT, async (req, res) => {
+    const { year, month } = req.query;
+
+    // year, month 필수
+    if (!year || !month) {
+        return res.status(400).json({ error: "연도와 월를 모두 입력해야 합니다." });
+    }
+
+    const parsedYear = parseInt(year, 10);
+    const parsedMonth = parseInt(month, 10);
+
+    if (isNaN(parsedYear) || isNaN(parsedMonth) || parsedMonth < 1 || parsedMonth > 12) {
+        return res.status(400).json({ error: "올바른 연도 및 월을 입력해주세요." });
+    }
+
+    try {
+        const startDate = new Date(Date.UTC(parsedYear, parsedMonth - 1, 1));
+        const endDate = new Date(Date.UTC(parsedYear, parsedMonth, 0, 23, 59, 59));
+
+        const { data: records, error } = await supabase
+            .from("study_record")
+            .select("*")
+            .gte("start_time", startDate.toISOString())
+            .lte("end_time", endDate.toISOString())
+            .order("start_time", { ascending : true })
+            .setHeader('Authorization', req.headers.authorization);
+    if (error) {
+        return res.status(500).json({ error: "기록 캘린더 조회 실패", details: error.message});
+    }
+
+    // 날짜별 그룹화
+    const recordsByDay = {};
+    for (let i = 1; i <= 31; i++) {
+        recordsByDay[i] = [];
+    }
+
+    for (const record of records) {
+        const day = new Date(record.start_time).getUTCDate();
+        recordsByDay[day].push(record);
+    }
+
+    res.status(200).json({
+        message: "기록 캘린더 데이터를 성공적으로 불러왔습니다.",
+        year: parsedYear,
+        month: parsedMonth,
+        records_by_day: recordsByDay
+    });
+
+    } catch (error) {
+        console.error("기록 캘린더 조회 중 오류 발생:", error);
+        res.status(500).json({ error: "서버 오류 발생" });
+    }
+});
+
 // 단일 record 조회
 router.get("/records/:id", verifySupabaseJWT, async (req, res) => {
     const { id } = req.params;
