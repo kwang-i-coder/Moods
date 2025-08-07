@@ -73,7 +73,7 @@ router.post('/signin_kakao', async (req, res) => {
     try {
         const { data, error } = await supabase.auth.signInWithIdToken({
             provider: 'kakao',
-            token: 'kakao_token'
+            token: kakao_token
             });
         if(error){
             return res.status(500).send(`signIn error: ${error.message}`)
