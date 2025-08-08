@@ -11,17 +11,27 @@ router.post('/start', verifySupabaseJWT, async (req, res) => {
     console.log('[라우트 호출] /study-sessions/start')
 
     // 요청 바디에서 title, goals(체크리스트) 받기
-    const {title, goals, space_id} = req.body;
+    const {title, goals = [], space_id} = req.body;
 
-    if (!title || typeof title !== 'string') {
+    if (typeof title !== 'string' || !title.trim()) {
         return res.status(400).json({error: "제목은 필수입니다."});
     }
 
-    if(goals && (!Array.isArray(goals) || goals.length > 10)) {
-        return res.status(400).json({error: "목표는 최대 10개여야 합니다."})
-    }
+    // goals 정규화
+    const normalizeGoals = (arr) => {
+        if (!Array.isArray(arr)) return [];
+        return arr.slice(0, 10).map((g) => {
+            if (typeof g === 'string') {
+                return {text: g.trim(), done: false};
+            }
+            const text = typeof g?.text === 'string' ? g.text.trim() : '';
+            const done = typeof g?.done === 'boolean' ? g.done : false;
+            return {text, done};
+        }).filter(g => g.text.length > 0);
+    };
+    const goalsNorm = normalizeGoals(goals);
 
-    if(!space_id){
+    if(!space_id || typeof space_id != 'string'){
         return res.status(400).send('space_id가 누락됐습니다.')
     }
 
@@ -41,16 +51,41 @@ router.post('/start', verifySupabaseJWT, async (req, res) => {
     // 레디스에 입력
     await redisClient.hSet(redis_key, {
         user_id: req.user.sub,
-        title:title,
+        title:title.trim(),
         space_id: space_id,
         start_time: start_time,
         status: 'active',
         accumulatedPauseSeconds: '0',
-        goals: JSON.stringify(goals || []),
+        goals: JSON.stringify(goalsNorm)
     });
     console.log(`세션 등록 완료: ${await redisClient.hGet(redis_key, 'user_id')}`)
-    return res.status(200).json({success: true, start_time: start_time});
-})
+    return res.status(200).json({
+        success: true,
+        start_time,
+        session: {title: title.trim(), space_id: space_id, goals: goalsNorm}
+    });
+});
+
+// 목표 완료 토글
+router.patch('/goals/:index', verifySupabaseJWT, async (req, res) => {
+    const idx = Number(req.params.index);
+    const {done} = req.body;
+    const key = `sessions:${req.user.sub}`;
+    const sess = await redisClient.hGetAll(key);
+
+    if (Object.keys(sess).length === 0) {
+        return res.status(400).json({error: '세션이 없습니다.'});
+    }
+
+    const goals = (() => { try { return JSON.parse(sess.goals || '[]'); } catch { return []; } })();
+    if (!Number.isInteger(idx) || idx < 0 || idx >= goals.length) {
+        return res.status(400).json({ error: '잘못된 index' });
+    }
+    goals[idx].done = !!done;                                  
+
+    await redisClient.hSet(key, { goals: JSON.stringify(goals) });
+    res.json({ success: true, goals });
+});
 
 // 공부 세션 일시 정지
 router.get('/pause', verifySupabaseJWT, async (req, res) => {
@@ -119,6 +154,7 @@ router.get('/resume', verifySupabaseJWT, async (req, res) => {
         success: true,
         resume_at: resume_at.toISOString(),
         accumulatedPauseSeconds: accumulatedPauseSeconds,
+        duration
     });
 });
 
@@ -178,9 +214,16 @@ router.get('/quit', verifySupabaseJWT, async (req, res) => {
 });
 
 router.post('/session-to-record', verifySupabaseJWT, async (req, res) => {
-    const {is_public=false, tags} = req.body;
+    const {is_public=false, tags = []} = req.body;
     const redis_key = `sessions:${req.user.sub}`;
     const session = await redisClient.hGetAll(redis_key);
+
+    //goals
+    const goals = (() => {
+        try {
+            return JSON.parse(session.goals || '[]');
+        } catch { return []; }
+    })();
 
     if(Object.keys(session).length === 0){
         console.log(`세션이 존재하지 않음: ${redis_key}`);
@@ -198,10 +241,12 @@ router.post('/session-to-record', verifySupabaseJWT, async (req, res) => {
     const data = {
         user_id: req.user.sub,
         space_id: session.space_id,
-        duration: duration,
+        duration,
         start_time: start_time.toISOString(),
         end_time: end_time.toISOString(),
-        is_public: is_public
+        is_public,
+        title: session.title || null,
+        goals
     };
     
     const {data:record_data, error: record_error} = await supabase.from('study_record').insert(data).setHeader('Authorization', req.headers.authorization).select();
@@ -217,7 +262,11 @@ router.post('/session-to-record', verifySupabaseJWT, async (req, res) => {
         .in('tag', tags)
         .setHeader('Authorization', req.headers.authorization);
 
-        var tag_hash = {}
+        if (error) {
+            return res.status(500).send('supabase select error');
+        };
+
+        const tag_hash = {}
         for(const existing_tag of existing_tags){
             tag_hash[existing_tag.tag] = existing_tag.id;
         }
