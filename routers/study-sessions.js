@@ -6,12 +6,25 @@ import { v4 as uuidv4 } from "uuid";
 
 const router = express.Router()
 
-// 공부 세션 시작
-router.get('/start', verifySupabaseJWT, async (req, res) => {
+// 공부 세션 시작 (제목, 공간, 오늘 할일 추가)
+router.post('/start', verifySupabaseJWT, async (req, res) => {
     console.log('[라우트 호출] /study-sessions/start')
 
-    // 최초 기록 시 공간 정보를 받아서 저장
-    const {space_id} = req.query;
+    // 요청 바디에서 title, goals(체크리스트) 받기
+    const {title, goals, space_id} = req.body;
+
+    if (!title || typeof title !== 'string') {
+        return res.status(400).json({error: "제목은 필수입니다."});
+    }
+
+    if(goals && (!Array.isArray(goals) || goals.length > 10)) {
+        return res.status(400).json({error: "목표는 최대 10개여야 합니다."})
+    }
+
+    if(!space_id){
+        return res.status(400).send('space_id가 누락됐습니다.')
+    }
+
     // 공부 시작시간은 서버 시각으로 정한 후 클라이언트에게 응답으로 줌
     const start_time = new Date().toISOString();
     // 해당 유저의 세션이 저장되는 redis id
@@ -24,19 +37,16 @@ router.get('/start', verifySupabaseJWT, async (req, res) => {
         console.log(`다중 세션 시도: ${redis_key}`)
         return res.status(400).send('이미 세션이 존재합니다.');
     }
-
-    // 공간 id가 누락된 경우
-    if(!space_id){
-        return res.status(400).send('space_id가 누락됐습니다.')
-    }
     
     // 레디스에 입력
     await redisClient.hSet(redis_key, {
         user_id: req.user.sub,
+        title:title,
         space_id: space_id,
         start_time: start_time,
         status: 'active',
         accumulatedPauseSeconds: '0',
+        goals: JSON.stringify(goals || []),
     });
     console.log(`세션 등록 완료: ${await redisClient.hGet(redis_key, 'user_id')}`)
     return res.status(200).json({success: true, start_time: start_time});
