@@ -37,6 +37,13 @@ router.post('/start', verifySupabaseJWT, async (req, res) => {
 
     // 공부 시작시간은 서버 시각으로 정한 후 클라이언트에게 응답으로 줌
     const start_time = new Date().toISOString();
+    // 등록되지 않는 공간일 경우 테이블에 upsert
+    const {error} = await supabase.from('spaces').upsert({
+        id: space_id
+    }).setHeader('Authorization', req.headers.authorization);
+    if(error){
+        res.status(500).send(`upsert space error: ${error.message}`)
+    }
     // 해당 유저의 세션이 저장되는 redis id
     const redis_key = `sessions:${req.user.sub}`
     // redis_key에 해당하는 세션 데이터
