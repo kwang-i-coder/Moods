@@ -167,6 +167,72 @@ router.get('/visited', verifySupabaseJWT, async (req, res) => {
     }
 });
 
+router.post('/favorite', verifySupabaseJWT,async (req, res) => {
+    console.log('[라우트 호출] POST /spaces/favorite');
+    const {space_id} = req.body;
+    if (!space_id) {
+        return res.status(400).json({ error: "장소 ID가 필요합니다." });
+    };
+
+    // 서비스에서 처음 방문하는 공간일 경우에 대비하여 공간 테이블에 upsert 진행
+    const {error: spaceError} = await supabase.from('spaces').upsert({
+        id: space_id
+    }).setHeader('Authorization', req.headers.authorization);
+    if (spaceError) {
+        return res.status(500).json({ error: `upsert_error: ${spaceError.message}` });
+    }
+
+    // favorite_spaces 테이블에 사용자-장소 관계 추가 (중복 방지를 위해 upsert 사용)
+    const { error: favoriteError } = await supabase.from('favorite_place').upsert({
+        user_id: req.user.sub,
+        space_id: space_id
+    }).setHeader('Authorization', req.headers.authorization);
+
+    if (favoriteError) {
+        console.error('즐겨찾기 추가 Supabase 오류:', favoriteError);
+        return res.status(500).json({ error: `즐겨찾기 추가 실패: ${favoriteError.message}` });
+    }
+
+    return res.status(201).json({ success: true, message: "즐겨찾기에 추가되었습니다." });
+});
+
+router.delete('/favorite', verifySupabaseJWT, async (req, res) => {
+    console.log('[라우트 호출] DELETE /spaces/favorite');
+    const {space_id} = req.body;
+    if (!space_id) {
+        return res.status(400).json({ error: "장소 ID가 필요합니다." });
+    }
+
+    // favorite_spaces 테이블에서 사용자-장소 관계 삭제
+    const { error: favoriteError } = await supabase
+    .from('favorite_place')
+    .delete()
+    .eq('user_id', req.user.sub)
+    .eq('space_id', space_id)
+    .setHeader('Authorization', req.headers.authorization);
+
+    if (favoriteError) {
+        console.error('즐겨찾기 삭제 Supabase 오류:', favoriteError);
+        return res.status(500).json({ error: `즐겨찾기 삭제 실패: ${favoriteError.message}` });
+    }
+
+    return res.status(200).json({ success: true, message: "즐겨찾기에서 삭제되었습니다." });
+})
+
+router.get('/favorite', verifySupabaseJWT, async (req, res) => {
+    console.log('[라우트 호출] GET /spaces/favorite');
+    
+    const {data, error} = await supabase.from('favorite_place').select('space_id').setHeader('Authorization', req.headers.authorization);
+    if(error){
+        console.error('즐겨찾기 조회 Supabase 오류:', error);
+        return res.status(500).json({ error: `즐겨찾기 조회 실패: ${error.message}` });
+    }
+    return res.status(200).json({
+        success: true,
+        favorite_spaces: data.map(item => item.space_id)
+    }); 
+})
+
 export default router;
 
 // 거리 계산 함수
