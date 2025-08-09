@@ -102,6 +102,7 @@ router.get('/detail', verifySupabaseJWT, async (req, res) => {
             .from('spaces')
             .select('*')
             .in('id', space_id)
+            .eq('is_public', false)
             .setHeader('Authorization', req.headers.authorization);
 
         if (error) {
@@ -116,20 +117,20 @@ router.get('/detail', verifySupabaseJWT, async (req, res) => {
             "X-Goog-FieldMask": "id,displayName,formattedAddress,types,location",
         };
 
-        // 2. 개인/공공 장소 분리 및 공공 장소 API 호출 준비
+        // 개인 장소 데이터 추가
         for (const space of spacesFromDb) {
-            if (space.is_public) {
-                const url = `https://places.googleapis.com/v1/places/${space.id}?languageCode=ko&regionCode=kr`;
-                publicSpacePromises.push(fetch(url, { method: 'GET', headers: googleApiHeaders }));
-            } else {
-                privateSpacesData.push({
-                    space_id: space.id,
-                    name: space.name,
-                    formatted_address: space.address,
-                    types: 'private',
-                    location: null
-                });
-            }
+            privateSpacesData.push({
+                space_id: space.id,
+                name: space.name,
+                formatted_address: space.address,
+                types: 'private',
+                location: null
+            });
+        }
+
+        for(const id of space_id){
+            const url = `https://places.googleapis.com/v1/places/${id}?languageCode=ko&regionCode=kr`;
+            publicSpacePromises.push(fetch(url, { method: 'GET', headers: googleApiHeaders }));
         }
 
         // 3. Google Places API 병렬 호출 및 결과 처리
