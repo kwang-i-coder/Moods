@@ -85,65 +85,92 @@ router.get('/near', async (req, res) => {
     }
 })
 
-router.get('/detail', async (req, res) => {
+router.get('/detail', verifySupabaseJWT, async (req, res) => {
     console.log('[라우트 호출] GET /spaces/detail');
     // 장소 상세 정보 조회 라우트
-    var { space_id } = req.query;
+    let { space_id } = req.query;
     if (!space_id) {
         return res.status(400).json({ error: "장소 ID가 필요합니다." });
     }
-    if(!Array.isArray(space_id)) {
+    if (!Array.isArray(space_id)) {
         space_id = [space_id]; // 단일 ID를 배열로 변환
     }
 
-    
-    const headers = {
-        "Content-Type": "application/json",
-        "X-Goog-Api-Key": process.env.GOOGLE_API_KEY,
-        "X-Goog-FieldMask": "displayName.text,formattedAddress,types,location",
-    };
-    var response_data = {
-        success: true,
-        data: []
-    };
+    try {
+        // 1. DB에서 기본 공간 정보 조회
+        const { error, data: spacesFromDb } = await supabase
+            .from('spaces')
+            .select('*')
+            .in('id', space_id)
+            .setHeader('Authorization', req.headers.authorization);
 
-    for(const id of space_id) {
-        const url = `https://places.googleapis.com/v1/places/${id}?languageCode=ko&regionCode=kr`;
-        try {
-            const response = await fetch(url, {
-                method: 'GET',
-                headers: headers
-            });
-            if (!response.ok) {
-                throw new Error(`HTTP error! status: ${response.status}`);
-            }
-            const result = await response.json();
-            if (!result) {
-                return res.status(404).json({ error: "장소를 찾을 수 없습니다." });
-            }
+        if (error) {
+            throw new Error(`DB 조회 실패: ${error.message}`);
+        }
 
-            // 장소 정보 가공
-            const spaceData = {
-                space_id: result.id,
-                name: result.displayName.text,
-                formatted_address: result.formattedAddress,
-                types: "",
-                location: {lat: result.location.latitude, lng: result.location.longitude}
-            };
-            for(const t of result.types) {
-                if(['cafe', 'library'].includes(t)) {
-                    spaceData.types = t;
-                    break; // 첫 번째 타입만 추가
+        const privateSpacesData = [];
+        const publicSpacePromises = [];
+        const googleApiHeaders = {
+            "Content-Type": "application/json",
+            "X-Goog-Api-Key": process.env.GOOGLE_API_KEY,
+            "X-Goog-FieldMask": "id,displayName,formattedAddress,types,location",
+        };
+
+        // 2. 개인/공공 장소 분리 및 공공 장소 API 호출 준비
+        for (const space of spacesFromDb) {
+            if (space.is_public) {
+                const url = `https://places.googleapis.com/v1/places/${space.id}?languageCode=ko&regionCode=kr`;
+                publicSpacePromises.push(fetch(url, { method: 'GET', headers: googleApiHeaders }));
+            } else {
+                privateSpacesData.push({
+                    space_id: space.id,
+                    name: space.name,
+                    formatted_address: space.address,
+                    types: 'private',
+                    location: null
+                });
+            }
+        }
+
+        // 3. Google Places API 병렬 호출 및 결과 처리
+        const publicSpacesResults = await Promise.allSettled(publicSpacePromises);
+        const publicSpacesData = [];
+
+        for (const result of publicSpacesResults) {
+            if (result.status === 'fulfilled' && result.value.ok) {
+                const placeDetails = await result.value.json();
+                let primaryType = 'unknown';
+                for (const t of placeDetails.types || []) {
+                    if (['cafe', 'library'].includes(t)) {
+                        primaryType = t;
+                        break;
+                    }
                 }
+                publicSpacesData.push({
+                    space_id: placeDetails.id,
+                    name: placeDetails.displayName?.text,
+                    formatted_address: placeDetails.formattedAddress,
+                    types: primaryType,
+                    location: {
+                        lat: placeDetails.location?.latitude,
+                        lng: placeDetails.location?.longitude
+                    }
+                });
+            } else {
+                const reason = result.reason || `Status: ${result.value?.status}`;
+                console.error("Google Places API 호출 실패:", reason);
             }
-            response_data.data.push(spaceData);
-        } catch (error) {
-            console.error("장소 상세 정보 조회 오류:", error);
-            return res.status(500).json({ error: "서버 오류" });
+        }
+
+        // 4. 모든 데이터 취합 후 응답
+        const allData = [...privateSpacesData, ...publicSpacesData];
+        return res.status(200).json({ success: true, data: allData });
+
+    } catch (e) {
+        console.error("장소 상세 정보 처리 중 서버 오류:", e);
+        return res.status(500).json({ error: "서버 오류가 발생했습니다." });
     }
-    }
-    return res.status(200).json(response_data);
-})
+});
 
 router.get('/visited', verifySupabaseJWT, async (req, res) => {
     console.log('[라우트 호출] GET /spaces/visited');
@@ -168,6 +195,33 @@ router.get('/visited', verifySupabaseJWT, async (req, res) => {
         return res.status(500).json({error: "서버 오류"});
     }
 });
+
+router.patch('/private-spaces/:space_id', verifySupabaseJWT, async (req, res) => {
+    console.log('[라우트 호출] PATCH /spaces/favorite-spaces/:space_id');
+    const { space_id } = req.params;
+    const columns_to_update = {};
+    for (const field of ['name', 'address']){
+        if (req.body[field]) {
+            columns_to_update[field] = req.body[field];
+        }
+    };
+    const {error, data} = await supabase
+        .from('spaces')
+        .update(columns_to_update)
+        .eq('id', space_id)
+        .eq('user_id', req.user.sub)
+        .setHeader('Authorization', req.headers.authorization)
+        .select();
+    if(error){
+        console.error('개인 장소 수정 오류:', error);
+        return res.status(500).json({ error: `개인 장소 수정 실패: ${error.message}` });
+    }
+    return res.status(200).json({
+        success: true,
+        data: data[0]
+    });
+
+})
 
 router.post('/favorite', verifySupabaseJWT,async (req, res) => {
     console.log('[라우트 호출] POST /spaces/favorite');
