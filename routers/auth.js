@@ -2,8 +2,6 @@ import express from "express"
 import supabase from "../lib/supabaseClient.js"
 import supabaseAdmin from "../lib/supabaseAdmin.js";
 import cookieParser from "cookie-parser";
-import { v4 as uuidv4 } from "uuid";
-import e from "express";
 
 
 
@@ -66,11 +64,15 @@ router.post('/signin', async(req, res, next) => {
 })
 
 router.post('/signin_kakao', async (req, res) => {
+    console.log('[라우트 호출] POST /auth/signin_kakao');
+    // 요청 본문에서 카카오 토큰 받아서 검증
     const {kakao_token} = req.body;
+    // 카카오 토큰이 없으면 에러 응답
     if(!kakao_token){
         return res.status(400).send('토큰 누락')
     }
     try {
+        // 카카오로 로그인 시도
         const { data, error } = await supabase.auth.signInWithIdToken({
             provider: 'kakao',
             token: kakao_token
@@ -78,6 +80,7 @@ router.post('/signin_kakao', async (req, res) => {
         if(error){
             return res.status(500).send(`signIn error: ${error.message}`)
         }
+        // 닉네임 정보 가져오기
         const {data: userData, error: userError} = await supabase
             .from('users')
             .select('nickname')
@@ -88,7 +91,8 @@ router.post('/signin_kakao', async (req, res) => {
         if(userError){
             return res.status(500).send(`userData error: ${userError.message}`)
         }
-
+        
+        // 성공 응답
         return res.status(200).json({
             message: '로그인 성공',
             session: {
@@ -110,13 +114,15 @@ router.post('/signin_kakao', async (req, res) => {
 
 
 router.post('/send-verification', async(req, res)=>{
+    // 확인 이메일 최초 전송 라우트
     console.log('[라우트 호출] POST /auth/send-verification');
     // 요청 검증
     const { email } = req.body;
     if (!email) return res.status(400).send("잘못된 양식");
+    // supabase는 비밀번호 없이는 이메일 인증을 하지 못하므로 임의의 이메일을 사용하여 인증메일 요청
     const password = generateRandomPassword();
     try {
-        // 회원가입 호출 (추가 정보 저장)
+        // 회원가입 호출 (사실상 이메일 최초 전송 기능)
         const { data, error } = await supabase.auth.signUp({
             email,
             password,
@@ -146,6 +152,7 @@ router.post('/send-verification', async(req, res)=>{
 })
 
 router.post('/signup', async (req, res) => {
+    // 이메일 인증이 완료된 후 비밀번호, 닉네임 등 유저 정보 저장
     console.log('[라우트 호출] POST /auth/signup');
     const {user_id ,password, nickname, birthday, gender} = req.body;
     if(!user_id||!password||!nickname||!birthday||!gender){
@@ -173,6 +180,7 @@ router.post('/signup', async (req, res) => {
 
 })
 
+// 이메일 인증이 완료되었는지 확인
 router.get('/is-verified', async(req, res) => {
     console.log('[라우트 호출] GET /auth/is-verified');
     // 이메일로 사용자 테이블에서 정보 조회 (이메일 인증 여부와 프로바이더 정보 확인)
