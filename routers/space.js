@@ -97,7 +97,7 @@ router.get('/detail', verifySupabaseJWT, async (req, res) => {
     }
 
     try {
-        // 1. DB에서 기본 공간 정보 조회
+        // DB에서 기본 공간 정보 조회
         const { error, data: spacesFromDb } = await supabase
             .from('spaces')
             .select('*')
@@ -128,12 +128,18 @@ router.get('/detail', verifySupabaseJWT, async (req, res) => {
             });
         }
 
-        for(const id of space_id){
+        const privateSpaces = spacesFromDb.map(space => space.id);
+        const publicSpaces = space_id.filter(id => !privateSpaces.includes(id));
+
+
+
+        // 공공 장소 데이터 추가
+        for(const id of publicSpaces){
             const url = `https://places.googleapis.com/v1/places/${id}?languageCode=ko&regionCode=kr`;
             publicSpacePromises.push(fetch(url, { method: 'GET', headers: googleApiHeaders }));
         }
 
-        // 3. Google Places API 병렬 호출 및 결과 처리
+        // Google Places API 병렬 호출 및 결과 처리
         const publicSpacesResults = await Promise.allSettled(publicSpacePromises);
         const publicSpacesData = [];
 
@@ -163,7 +169,7 @@ router.get('/detail', verifySupabaseJWT, async (req, res) => {
             }
         }
 
-        // 4. 모든 데이터 취합 후 응답
+        // 모든 데이터 취합 후 응답
         const allData = [...privateSpacesData, ...publicSpacesData];
         return res.status(200).json({ success: true, data: allData });
 
