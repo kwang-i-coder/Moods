@@ -2,6 +2,8 @@ import express from "express"
 import supabase from "../lib/supabaseClient.js"
 import verifySupabaseJWT from "../lib/verifyJWT.js";
 import fetch from "node-fetch";
+import { v4 as uuidv4 } from "uuid";
+
 const router = express.Router();
 
 router.use(express.json());
@@ -169,51 +171,91 @@ router.get('/visited', verifySupabaseJWT, async (req, res) => {
 
 router.post('/favorite', verifySupabaseJWT,async (req, res) => {
     console.log('[라우트 호출] POST /spaces/favorite');
-    const {space_id} = req.body;
-    if (!space_id) {
-        return res.status(400).json({ error: "장소 ID가 필요합니다." });
-    };
+    const { space_id: initial_space_id, is_public = true, name, address } = req.body;
+    let space_id = initial_space_id;
 
-    // 서비스에서 처음 방문하는 공간일 경우에 대비하여 공간 테이블에 upsert 진행
-    const {error: spaceError} = await supabase.from('spaces').upsert({
-        id: space_id
-    }).setHeader('Authorization', req.headers.authorization);
-    if (spaceError) {
-        return res.status(500).json({ error: `upsert_error: ${spaceError.message}` });
+    if (is_public) {
+        // --- Public Space Logic ---
+        if (!space_id) {
+            return res.status(400).json({ error: "공공 장소의 경우 장소 ID(space_id)가 필요합니다." });
+        }
+        // Ensure the public space exists in our 'spaces' table.
+        const { error: spaceError } = await supabase
+            .from('spaces')
+            .upsert({ id: space_id, is_public: true })
+            .setHeader('Authorization', req.headers.authorization);
+
+        if (spaceError) {
+            console.error('공공 장소 정보 upsert 오류:', spaceError);
+            return res.status(500).json({ error: `공간 정보 저장 실패: ${spaceError.message}` });
+        }
+    } else {
+        // --- Private Space Logic ---
+        if (!name || !address) {
+            return res.status(400).json({ error: "개인 장소의 경우 이름(name)과 주소(address)가 필요합니다." });
+        }
+
+        // 사적 장소 중에서 이름이 일치하는 장소가 있는지 조회
+        const { data: existingSpace, error: selectError } = await supabase
+            .from('spaces')
+            .select('id')
+            .eq('user_id', req.user.sub)
+            .eq('name', name)
+            .eq('is_public', false)
+            .maybeSingle(); 
+
+        if (selectError) {
+            console.error('개인 장소 조회 오류:', selectError);
+            return res.status(500).json({ error: `개인 장소 조회 실패: ${selectError.message}` });
+        }
+
+        if (existingSpace) {
+            // Use the ID of the existing private space.
+            space_id = existingSpace.id;
+        } else {
+            // Create a new private space as it doesn't exist.
+            space_id = uuidv4();
+            const newSpaceData = { id: space_id, user_id: req.user.sub, name, address, is_public: false };
+            const { error: insertError } = await supabase.from('spaces').insert(newSpaceData).setHeader('Authorization', req.headers.authorization);
+
+            if (insertError) {
+                console.error('개인 장소 생성 오류:', insertError);
+                return res.status(500).json({ error: `개인 장소 생성 실패: ${insertError.message}` });
+            }
+        }
     }
 
-    // favorite_spaces 테이블에 사용자-장소 관계 추가 (중복 방지를 위해 upsert 사용)
-    const { error: favoriteError } = await supabase.from('favorite_place').upsert({
-        user_id: req.user.sub,
-        space_id: space_id
-    }).setHeader('Authorization', req.headers.authorization);
+    const { error: favoriteError } = await supabase
+        .from('favorite_spaces') 
+        .upsert({ space_id: space_id, user_id: req.user.sub })
+        .setHeader('Authorization', req.headers.authorization);
 
     if (favoriteError) {
         console.error('즐겨찾기 추가 Supabase 오류:', favoriteError);
         return res.status(500).json({ error: `즐겨찾기 추가 실패: ${favoriteError.message}` });
     }
 
-    return res.status(201).json({ success: true, message: "즐겨찾기에 추가되었습니다." });
+    return res.status(201).json({ success: true, message: "즐겨찾기에 추가되었습니다.", space_id });
 });
 
 router.delete('/favorite', verifySupabaseJWT, async (req, res) => {
     console.log('[라우트 호출] DELETE /spaces/favorite');
-    const {space_id} = req.body;
+    const { space_id } = req.body;
     if (!space_id) {
         return res.status(400).json({ error: "장소 ID가 필요합니다." });
     }
 
     // favorite_spaces 테이블에서 사용자-장소 관계 삭제
-    const { error: favoriteError } = await supabase
-    .from('favorite_place')
+    const { error } = await supabase
+    .from('favorite_spaces') // 테이블명 일관성을 위해 favorite_spaces로 변경
     .delete()
     .eq('user_id', req.user.sub)
     .eq('space_id', space_id)
     .setHeader('Authorization', req.headers.authorization);
 
-    if (favoriteError) {
-        console.error('즐겨찾기 삭제 Supabase 오류:', favoriteError);
-        return res.status(500).json({ error: `즐겨찾기 삭제 실패: ${favoriteError.message}` });
+    if (error) {
+        console.error('즐겨찾기 삭제 Supabase 오류:', error);
+        return res.status(500).json({ error: `즐겨찾기 삭제 실패: ${error.message}` });
     }
 
     return res.status(200).json({ success: true, message: "즐겨찾기에서 삭제되었습니다." });
@@ -222,7 +264,9 @@ router.delete('/favorite', verifySupabaseJWT, async (req, res) => {
 router.get('/favorite', verifySupabaseJWT, async (req, res) => {
     console.log('[라우트 호출] GET /spaces/favorite');
     
-    const {data, error} = await supabase.from('favorite_place').select('space_id').setHeader('Authorization', req.headers.authorization);
+    const { data, error } = await supabase
+        .from('favorite_spaces') // 테이블명 일관성을 위해 favorite_spaces로 변경
+        .select('space_id').setHeader('Authorization', req.headers.authorization);
     if(error){
         console.error('즐겨찾기 조회 Supabase 오류:', error);
         return res.status(500).json({ error: `즐겨찾기 조회 실패: ${error.message}` });
