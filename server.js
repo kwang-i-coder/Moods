@@ -7,9 +7,9 @@ import auth_router from "./routers/auth.js";
 import user_router from "./routers/user.js";
 import space_router from "./routers/space.js";
 import session_router from "./routers/study-sessions.js";
-
 import record_router from "./routers/record.js";
 import feedback_router from "./routers/feedback.js";
+import photo_router from "./routers/photo-management.js";
 
 const app = express();
 
@@ -30,6 +30,7 @@ app.use('/spaces', space_router);
 app.use('/record', record_router);
 app.use('/feedback', feedback_router);
 app.use('/study-sessions', session_router);
+app.use('/photos', photo_router);
 
 app.get("/", (req, res) => {
     res.send("this is root page");
