@@ -1,12 +1,10 @@
 import express from "express";
-import crypto, { verify } from "crypto";
+import crypto from "crypto";
 import multer from "multer";
 import sharp from "sharp";
-import supabase from "../lib/supabaseClient";
-import { supabaseAdmin } from "../lib/supabaseAdmin.js";
-import verifySupabaseJWT from "../lib/verifyJWT";
-import { createClient } from "@supabase/supabase-js";
-import router from "./auth.js";
+import supabase from "../lib/supabaseClient.js";
+import supabaseAdmin from "../lib/supabaseAdmin.js";
+import verifySupabaseJWT from "../lib/verifyJWT.js";
 
 const router = express.Router();
 
@@ -107,7 +105,7 @@ router.post('/records/:recordId', verifySupabaseJWT, upload.array('files', 5), a
 
             // DB 저장
             const { data: row, error: insErr} = await supabase
-                .from('record-photos')
+                .from('record_photos')
                 .insert({
                     record_id: recordId,
                     path,
@@ -179,7 +177,7 @@ router.delete('/:photoId', verifySupabaseJWT, async (req, res) => {
         const { photoId } = req.params;
 
         const { data: photo, error } = await supabase
-            .from('record-photos')
+            .from('record_photos')
             .select('id, record_id, path, thumb_path')
             .eq('id', photoId)
             .single()
