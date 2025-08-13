@@ -70,6 +70,21 @@ router.get('/near', async (req, res) => {
                         break; // 모든 타입을 추가
                     }
                 }
+
+                // supabase에 upsert하기 (있는 공간이면 그대로, 없는 공간이면 추가)
+                const {data:space_data,error} = await supabase.from('spaces').upsert({
+                    id: data.space_id,
+                    is_public: true,
+                }).select('*').single();
+                if(error) {
+                    res.status(500).send(`upsert error: ${error.message}`);
+                }
+
+                // 분위기가 아직 분석되지 않았다면 워커에 작업 넘김
+                // if(space_data.mood_tag_status==="pending"){
+                //     await fetch('http://localhost:8000/jobs', {method:"POST", body:JSON.stringify({place_id:data.space_id})})
+                // }
+
                 result[idx] = data;
             }
             // 거리 기준으로 정렬
@@ -97,11 +112,12 @@ router.get('/detail', verifySupabaseJWT, async (req, res) => {
     }
 
     try {
-        // 1. DB에서 기본 공간 정보 조회
+        // DB에서 기본 공간 정보 조회
         const { error, data: spacesFromDb } = await supabase
             .from('spaces')
             .select('*')
             .in('id', space_id)
+            .eq('is_public', false)
             .setHeader('Authorization', req.headers.authorization);
 
         if (error) {
@@ -116,23 +132,29 @@ router.get('/detail', verifySupabaseJWT, async (req, res) => {
             "X-Goog-FieldMask": "id,displayName,formattedAddress,types,location",
         };
 
-        // 2. 개인/공공 장소 분리 및 공공 장소 API 호출 준비
+        // 개인 장소 데이터 추가
         for (const space of spacesFromDb) {
-            if (space.is_public) {
-                const url = `https://places.googleapis.com/v1/places/${space.id}?languageCode=ko&regionCode=kr`;
-                publicSpacePromises.push(fetch(url, { method: 'GET', headers: googleApiHeaders }));
-            } else {
-                privateSpacesData.push({
-                    space_id: space.id,
-                    name: space.name,
-                    formatted_address: space.address,
-                    types: 'private',
-                    location: null
-                });
-            }
+            privateSpacesData.push({
+                space_id: space.id,
+                name: space.name,
+                formatted_address: space.address,
+                types: 'private',
+                location: null
+            });
         }
 
-        // 3. Google Places API 병렬 호출 및 결과 처리
+        const privateSpaces = spacesFromDb.map(space => space.id);
+        const publicSpaces = space_id.filter(id => !privateSpaces.includes(id));
+
+
+
+        // 공공 장소 데이터 추가
+        for(const id of publicSpaces){
+            const url = `https://places.googleapis.com/v1/places/${id}?languageCode=ko&regionCode=kr`;
+            publicSpacePromises.push(fetch(url, { method: 'GET', headers: googleApiHeaders }));
+        }
+
+        // Google Places API 병렬 호출 및 결과 처리
         const publicSpacesResults = await Promise.allSettled(publicSpacePromises);
         const publicSpacesData = [];
 
@@ -162,7 +184,7 @@ router.get('/detail', verifySupabaseJWT, async (req, res) => {
             }
         }
 
-        // 4. 모든 데이터 취합 후 응답
+        // 모든 데이터 취합 후 응답
         const allData = [...privateSpacesData, ...publicSpacesData];
         return res.status(200).json({ success: true, data: allData });
 
@@ -171,6 +193,45 @@ router.get('/detail', verifySupabaseJWT, async (req, res) => {
         return res.status(500).json({ error: "서버 오류가 발생했습니다." });
     }
 });
+
+// // 분위기는 자주 호출하므로 공간 상세정보와 분리하여 처리
+// router.get('/mood', async (req, res) => {
+//     console.log('[라우트 호출] GET /spaces/mood');
+//     // 장소 분위기 조회 라우트
+//     let { space_id } = req.query;
+//     if (!space_id) {
+//         return res.status(400).json({ error: "장소 ID가 필요합니다." });
+//     }
+//     if (!Array.isArray(space_id)) {
+//         space_id = [space_id]; // 단일 ID를 배열로 변환
+//     }
+//     try {
+//         const {data, error} = await supabase
+//             .from('spaces')
+//             .select('id','mood_tag_status')
+//             .in('id', space_id)
+//             .eq('is_public', true)
+//         const mood_data = []
+//         for(const space of data){
+//             let data_per_space = {}
+//             data_per_space.space_id = space.id
+//             data_per_space.mood_tag_status = space.mood_tag_status
+
+//             if(space.mood_tag_status === 'pending'){
+//                 mood_data.push(data_per_space)
+//                 await fetch('http://localhost:8000/jobs', {method:"POST", body:JSON.stringify({place_id:data.id})})
+//                 continue
+//             }
+//             if(space.mood_tag_status === "queued" || space.mood_tag_status === "in-progress"){
+                
+//             }
+//         }
+//     } catch (error) {
+//         console.error("장소 분위기 조회 오류:", error);
+//         return res.status(500).json({error: "서버 오류"});
+//     }
+
+// })
 
 router.get('/visited', verifySupabaseJWT, async (req, res) => {
     console.log('[라우트 호출] GET /spaces/visited');
