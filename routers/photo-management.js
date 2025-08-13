@@ -35,12 +35,12 @@ async function assertOwnRecord(recordID, req) {
 }
 
 // 경로 생성
-const buildPath = (userID, recordID, suffix) =>
-    `${userID}/${recordID}/${crypto.randomUUID()}_${suffix}.webp`;
+const buildPath = (userID, recordID) =>
+    `${userID}/${recordID}/${crypto.randomUUID()}.webp`;
 
 // 사진 업로드
-// 원본 -> 리사이즈 -> webp 변환 및 썸네일 생성 후 스토리즈 업로드
-router.post('/records/:recordId', verifySupabaseJWT, upload.array('files', 5), async(req, res) => {
+// 원본 -> 리사이즈 -> webp 변환 후 스토리즈 업로드
+router.post('/records/:recordId', verifySupabaseJWT, upload.single('file'), async(req, res) => {
     console.log('[라우트 호출] POST /photos/records/:recordId');
     try {
         const { recordId } = req.params;
@@ -51,126 +51,108 @@ router.post('/records/:recordId', verifySupabaseJWT, upload.array('files', 5), a
             return res.status(400).json({ error: '유효하지 않은 기록ID입니다.' });
         }
 
-        if (!req.files || req.files.length === 0) {
+        if (!req.file) {
             return res.status(400).json({ error: '업로드 할 파일이 없습니다. '});
         }
 
-        // 현재 사진 개수 체크
-        const { count } = await supabase
+        // 기존 사진이 있는지 체크
+        const { data: existingPhoto } = await supabase
             .from('record_photos')
-            .select('id', { count: 'exact', head: true })
+            .select('id')
             .eq('record_id', recordId)
+            .single()
             .setHeader('Authorization', req.headers.authorization);
 
-        const remain = 10 - (count ?? 0);
-        if (remain <= 0) return res.status(400).json({ error: '최대 10장까지 업로드할 수 있습니다.' });
-        if (req.files.length > remain) return res.status(400).json({ error: `남은 업로드 가능: ${remain}장` });
-
-        const uploaded = [];
-
-        for (const file of req.files) {
-            // 이미지 리사이즈
-            const original = await sharp(file.buffer)
-                .rotate()
-                .resize({ width: 2000, height: 2000, fit: 'inside', withoutEnlargement: true})
-                .webp({ quality: 82 })
-                .toBuffer();
-
-            const meta = await sharp(original).metadata();
-
-            // 썸네일 생성
-            const thumb = await sharp(original)
-                .resize({ width: 480, height: 480, fit: 'inside', withoutEnlargement: true})
-                .webp({ quality: 78 })
-                .toBuffer();
-
-            // 경로 생성
-            const path = buildPath(req.user.sub, recordId, 'orig');
-            const thumbPath = buildPath(req.user.sub, recordId, 'thumb');
-
-            // Storage 업로드
-            const up1 = await supabaseAdmin.storage.from('study-photos')
-                .upload(path, original, { contentType: 'image/webp', upsert: false});
-            if(up1.error) throw up1.error;
-
-            const up2 = await supabaseAdmin.storage.from('study-photos')
-                .upload(thumbPath, thumb, {contentType: 'image/webp', upsert: false});
-            if (up2.error) {
-                // 원본 롤백
-                await supabaseAdmin.storage.from('study-photos').remove([path]).catch((rollbackError) => {
-                    console.error('파일 삭제롤백 실패:', rollbackError);
-                });
-                throw up2.error;
-            }
-
-            // DB 저장
-            const { data: row, error: insErr} = await supabase
-                .from('record_photos')
-                .insert({
-                    record_id: recordId,
-                    path,
-                    thumb_path: thumbPath,
-                    width: meta.width || null,
-                    height: meta.height || null,
-                    size_bytes: original.length,
-                    mime_type: 'image/webp'
-                })
-                .select()
-                .single()
-                .setHeader('Authorization', req.headers.authorization);
-            
-            if (insErr) {
-                // 스토리지 롤백
-                await supabaseAdmin.storage.from('study-photos').remove([path, thumbPath]).catch(() => {});
-                throw insErr;
-            }
-
-            uploaded.push(row);
+        if (existingPhoto) {
+            return res.status(400).json({ error: '이미 사진이 등록되어 있습니다.'});
         }
 
-        res.status(201).json({ success: true, photos: uploaded});
+        const file = req.file;
+
+        // 이미지 리사이즈
+        const processed = await sharp(file.buffer)
+            .rotate()
+            .resize({ width: 2000, height: 2000, fit: 'inside', withoutEnlargement: true})
+            .webp({ quality: 82 })
+            .toBuffer();
+
+        const meta = await sharp(processed).metadata();
+
+        // 경로 생성
+        const path = buildPath(req.user.sub, recordId);
+
+        // Storage 업로드
+        const { error: uploadError } = await supabaseAdmin.storage.from('study-photos')
+            .upload(path, processed, { contentType: 'image/webp', upsert: false });
+        if(uploadError) throw uploadError;
+
+        // DB 저장
+        const { data: row, error: insErr} = await supabase
+            .from('record_photos')
+            .insert({
+                record_id: recordId,
+                path,
+                width: meta.width || null,
+                height: meta.height || null,
+                size_bytes: processed.length,
+                mime_type: 'image/webp'
+            })
+            .select()
+            .single()
+            .setHeader('Authorization', req.headers.authorization);
+            
+        if (insErr) {
+            // 스토리지 롤백
+            await supabaseAdmin.storage.from('study-photos').remove([path]).catch(() => {});
+            throw insErr;
+        }
+
+        res.status(201).json({ success: true, photo: row});
     } catch (err) {
         console.error(err);
         res.status(err.status || 500).json({ error: err.message || '업로드 실패'});
     }
 });
 
-// 사진 목록
+// 사진 조회
 router.get('/records/:recordId', verifySupabaseJWT, async (req, res) => {
     console.log('[라우트 호출] GET /photos/records/:recordId');
     try {
         const { recordId } = req.params;
         await assertOwnRecord(recordId, req);
 
-        const { data: photos, error } = await supabase
+        const { data: photo, error } = await supabase
             .from('record_photos')
-            .select('id, path, thumb_path, is_thumbnail, created_at')
+            .select('id, path, created_at')
             .eq('record_id', recordId)
-            .order('created_at', { ascending: true })
+            .single()
             .setHeader('Authorization', req.headers.authorization);
 
-        if (error) throw error;
+        if (error && error.code !== 'PGRST116') throw error;
 
-        const signed = await Promise.all(photos.map(async p => {
-            const orig = await supabaseAdmin.storage.from('study-photos').createSignedUrl(p.path, 60 * 5);
-            const thmb = p.thumb_path
-                ? await supabaseAdmin.storage.from('study-photos').createSignedUrl(p.thumb_path, 60 * 5)
-                : { data: { signedUrl: null}};
-            return {
-                ...p,
-                url: orig.data?.signedUrl || null,
-                thumb_url: thmb.data?.signedUrl || null
-            };
-        }));
+        if (!photo) {
+            return res.json({ success: true, photo: null });
+        }
 
-        res.json({ success: true, photos: signed });
-    } catch (err) {
+        const { data: signedData, error: signedError } = await supabaseAdmin.storage
+            .from('study-photos')
+            .createSignedUrl(photo.path, 60 * 5);
+        
+        if (signedError) throw signedError;
+
+        const result = {
+            ...photo,
+            url: signedData.signedUrl
+        };
+
+        res.json({ success: true, photo: result });
+    } catch(err) {
         console.error(err);
-        res.status(err.status || 500).json({ error: err.message || '조회 실패'});
+        res.status(err.status || 500).json({ error: err.message || '조회 실패' });
     }
 });
 
-// 사진 삭제 (스토리지 + DB)
+// 사진 삭제
 router.delete('/:photoId', verifySupabaseJWT, async (req, res) => {
     console.log('[라우트 호출] DELETE /:photoId');
     try {
@@ -178,7 +160,7 @@ router.delete('/:photoId', verifySupabaseJWT, async (req, res) => {
 
         const { data: photo, error } = await supabase
             .from('record_photos')
-            .select('id, record_id, path, thumb_path')
+            .select('id, record_id, path')
             .eq('id', photoId)
             .single()
             .setHeader('Authorization', req.headers.authorization);
@@ -188,9 +170,16 @@ router.delete('/:photoId', verifySupabaseJWT, async (req, res) => {
         await assertOwnRecord(photo.record_id, req);
 
         // Storage 삭제
-        await supabaseAdmin.storage.from('study-photos').remove([photo.path, photo.thumb_path].filter(Boolean));
+        await supabaseAdmin.storage.from('study-photos').remove([photo.path]);
+
         // DB 삭제
-        await supabase.from('study-photos').delete().eq('id', photoId).setHeader('Authorization', req.headers.authorization);
+        const { error: deleteError } = await supabase
+            .from('record_photos')
+            .delete()
+            .eq('id', photoId)
+            .setHeader('Authorization', req.headers.authorization);
+
+        if (deleteError) throw deleteError;
 
         res.json({success: true});
     } catch (err) {
@@ -198,42 +187,5 @@ router.delete('/:photoId', verifySupabaseJWT, async (req, res) => {
         res.status(500).json({error: '삭제 실패'});
     }
 });
-
-// 대표 사진 지정
-router.patch('/:photoId/thumbnail', verifySupabaseJWT, async (req, res) => {
-        console.log('[라우터 호출] PATCH/:photoId/thumbnail');
-        try {
-            const { photoId } = req.params;
-
-            const { data: photo, error } = await supabase
-                .from('record_photos')
-                .select('id, record_id')
-                .eq('id', photoId)
-                .single()
-                .setHeader('Authorization', req.headers.authorization);
-            if (error || !photo) return res.status(404).json({ error: '사진을 찾을 수 없습니다. '});
-
-            await assertOwnRecord(photo.record_id, req);
-
-            // 하나 제외 전부 false로 설정
-            await supabase.from('record_photos')
-                .update({ is_thumbnail: false })
-                .eq('record_id', photo.record_id)
-                .setHeader('Authorization', req.headers.authorization);
-            
-            // 썸네일 하나만 true
-            await supabase
-                .from('record_photos')
-                .update({ is_thumbnail: true })
-                .eq('id', photoId)
-                .setHeader('Authorization', req.headers.authorization);
-            if (upErr) throw upErr;
-
-            res.json({ success: true, photo: updated });
-        } catch (err) {
-            console.error(err);
-            res.status(500).json({ error : '썸네일 지정 실패'});
-        }
-    });
 
 export default router;
