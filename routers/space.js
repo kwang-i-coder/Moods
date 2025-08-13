@@ -70,6 +70,21 @@ router.get('/near', async (req, res) => {
                         break; // 모든 타입을 추가
                     }
                 }
+
+                // supabase에 upsert하기 (있는 공간이면 그대로, 없는 공간이면 추가)
+                const {data:space_data,error} = await supabase.from('spaces').upsert({
+                    id: data.space_id,
+                    is_public: true,
+                }).select('*').single();
+                if(error) {
+                    res.status(500).send(`upsert error: ${error.message}`);
+                }
+
+                // 분위기가 아직 분석되지 않았다면 워커에 작업 넘김
+                // if(space_data.mood_tag_status==="pending"){
+                //     await fetch('http://localhost:8000/jobs', {method:"POST", body:JSON.stringify({place_id:data.space_id})})
+                // }
+
                 result[idx] = data;
             }
             // 거리 기준으로 정렬
@@ -178,6 +193,45 @@ router.get('/detail', verifySupabaseJWT, async (req, res) => {
         return res.status(500).json({ error: "서버 오류가 발생했습니다." });
     }
 });
+
+// // 분위기는 자주 호출하므로 공간 상세정보와 분리하여 처리
+// router.get('/mood', async (req, res) => {
+//     console.log('[라우트 호출] GET /spaces/mood');
+//     // 장소 분위기 조회 라우트
+//     let { space_id } = req.query;
+//     if (!space_id) {
+//         return res.status(400).json({ error: "장소 ID가 필요합니다." });
+//     }
+//     if (!Array.isArray(space_id)) {
+//         space_id = [space_id]; // 단일 ID를 배열로 변환
+//     }
+//     try {
+//         const {data, error} = await supabase
+//             .from('spaces')
+//             .select('id','mood_tag_status')
+//             .in('id', space_id)
+//             .eq('is_public', true)
+//         const mood_data = []
+//         for(const space of data){
+//             let data_per_space = {}
+//             data_per_space.space_id = space.id
+//             data_per_space.mood_tag_status = space.mood_tag_status
+
+//             if(space.mood_tag_status === 'pending'){
+//                 mood_data.push(data_per_space)
+//                 await fetch('http://localhost:8000/jobs', {method:"POST", body:JSON.stringify({place_id:data.id})})
+//                 continue
+//             }
+//             if(space.mood_tag_status === "queued" || space.mood_tag_status === "in-progress"){
+                
+//             }
+//         }
+//     } catch (error) {
+//         console.error("장소 분위기 조회 오류:", error);
+//         return res.status(500).json({error: "서버 오류"});
+//     }
+
+// })
 
 router.get('/visited', verifySupabaseJWT, async (req, res) => {
     console.log('[라우트 호출] GET /spaces/visited');

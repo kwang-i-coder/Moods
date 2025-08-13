@@ -261,6 +261,7 @@ router.post('/session-to-record', verifySupabaseJWT, async (req, res) => {
         console.log(record_error.message);
         return res.status(500).send(record_error.message);
     }
+    data.record_id = record_data[0].id;
     
     if(tags.length > 0){
         const {data: existing_tags, error} = await supabase
