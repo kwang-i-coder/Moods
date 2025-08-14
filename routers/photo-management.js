@@ -191,7 +191,7 @@ router.get('/records/:recordId', verifySupabaseJWT, async (req, res) => {
         // Signed URL 생성
         const { data: signedData, error: signedError } = await supabaseAdmin.storage
             .from('study-photos')
-            .createSignedUrl(photo.path, 60 * 5);
+            .createSignedUrl(photo.path, 60 * 60 * 60 * 60);
         
         if (signedError) throw signedError;
 
