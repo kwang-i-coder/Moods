@@ -5,6 +5,7 @@ import sharp from "sharp";
 import supabase from "../lib/supabaseClient.js";
 import supabaseAdmin from "../lib/supabaseAdmin.js";
 import verifySupabaseJWT from "../lib/verifyJWT.js";
+import { title } from "process";
 
 const router = express.Router();
 
@@ -255,5 +256,24 @@ router.delete('/:photoId', verifySupabaseJWT, async (req, res) => {
         res.status(err.status || 500).json({ error: err.message || '삭제 실패' });
     }
 });
+
+router.get('/wallpaper', async (req, res) => {
+    const {query} = req.query;
+    if(!query) {
+        return res.status(400).json({error: "검색어가 필요합니다."});
+    }
+    const header = {
+        "Content-Type": "application/json",
+    }
+    const body = {
+        title: query.trim()
+    }
+    const response = await fetch("http://localhost:8000/tasks/wallpaper", {method:"POST", headers:header, body:JSON.stringify(body)})
+    const data = await response.json();
+    return res.status(200).json({
+        success: true,
+        data: data
+    })
+})
 
 export default router;
