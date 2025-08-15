@@ -18,7 +18,10 @@ router.post('/signin', async(req, res, next) => {
     const {email, password} = req.body;
     
     // 이메일과 비밀번호가 없으면 에러 응답
-    if(!email || !password) return res.status(400).send("잘못된 양식");
+    if(!email || !password) {
+        console.error('[에러] POST /auth/signin: 잘못된 양식', req.body);
+        return res.status(400).send("잘못된 양식");
+    }
 
     // supabase로 로그인 시도
     try {
@@ -28,6 +31,7 @@ router.post('/signin', async(req, res, next) => {
         })
         // 로그인 실패 시 에러 응답
         if (error){
+            console.error('[에러] POST /auth/signin: 로그인 실패', error);
             return res.status(400).json({error: "로그인에 실패했습니다."});
         }
         // 닉네임 정보 가져오기 (닉네임 정보가 있어야 유저가 활동할 수 있으므로 닉네임 정보가 있는지 확인)
@@ -39,6 +43,7 @@ router.post('/signin', async(req, res, next) => {
             .setHeader('Authorization', `Bearer ${data.session.access_token}`);
 
         if (userError || !userData) {
+            console.error('[에러] POST /auth/signin: 유저 정보 없음', userError);
             return res.status(404).json({ error: "유저 정보를 찾을 수 없습니다." });
         }
 
@@ -59,6 +64,7 @@ router.post('/signin', async(req, res, next) => {
             }
         });
     } catch (error) {
+        console.error('[에러] POST /auth/signin: try-catch', error);
         return res.status(500).json({error: "서버 오류"});
     }
 })
@@ -69,6 +75,7 @@ router.post('/signin_kakao', async (req, res) => {
     const {kakao_token} = req.body;
     // 카카오 토큰이 없으면 에러 응답
     if(!kakao_token){
+        console.error('[에러] POST /auth/signin_kakao: 토큰 누락', req.body);
         return res.status(400).send('토큰 누락')
     }
     try {
@@ -78,6 +85,7 @@ router.post('/signin_kakao', async (req, res) => {
             token: kakao_token
             });
         if(error){
+            console.error('[에러] POST /auth/signin_kakao: signIn error', error);
             return res.status(500).send(`signIn error: ${error.message}`)
         }
         // 닉네임 정보 가져오기
@@ -89,6 +97,7 @@ router.post('/signin_kakao', async (req, res) => {
             .setHeader('Authorization', `Bearer ${data.session.access_token}`);
 
         if(userError){
+            console.error('[에러] POST /auth/signin_kakao: userData error', userError);
             return res.status(500).send(`userData error: ${userError.message}`)
         }
         
@@ -108,6 +117,7 @@ router.post('/signin_kakao', async (req, res) => {
             }
         })
     } catch (error) {
+        console.error('[에러] POST /auth/signin_kakao: try-catch', error);
         return res.status(500).send(`signIn error: ${error.message}`)
     }
 })
@@ -118,7 +128,10 @@ router.post('/send-verification', async(req, res)=>{
     console.log('[라우트 호출] POST /auth/send-verification');
     // 요청 검증
     const { email } = req.body;
-    if (!email) return res.status(400).send("잘못된 양식");
+    if (!email) {
+        console.error('[에러] POST /auth/send-verification: 잘못된 양식', req.body);
+        return res.status(400).send("잘못된 양식");
+    }
     // supabase는 비밀번호 없이는 이메일 인증을 하지 못하므로 임의의 이메일을 사용하여 인증메일 요청
     const password = generateRandomPassword();
     try {
@@ -135,6 +148,7 @@ router.post('/send-verification', async(req, res)=>{
             return res.status(400).json({ error: error.message });
         }
         if (!data || !data.user) {
+            console.error('[에러] POST /auth/send-verification: 인증메일 전송 오류', data);
             return res.status(500).json({ error: "인증메일 전송 오류가 발생했습니다." });
         }
         // 성공 응답
@@ -156,8 +170,9 @@ router.post('/signup', async (req, res) => {
     console.log('[라우트 호출] POST /auth/signup');
     const {user_id ,password, nickname, birthday, gender} = req.body;
     if(!user_id||!password||!nickname||!birthday||!gender){
+        console.error('[에러] POST /auth/signup: 잘못된 양식', req.body);
         return res.status(400).send("잘못된 양식");
-    };
+    }
     try{
         const {data, error: update_error}= await supabaseAdmin.auth.admin.updateUserById(
             user_id,
@@ -171,10 +186,12 @@ router.post('/signup', async (req, res) => {
             }
         )
         if(update_error){
+            console.error('[에러] POST /auth/signup: 비밀번호 설정 에러', update_error);
             return res.status(500).send(`비밀번호 설정 에러: ${update_error.message}`)
         }
         return res.status(200).json({message: "회원가입 성공", user_id: data.user.id, email: data.user.email})
     }catch(error){
+        console.error('[에러] POST /auth/signup: try-catch', error);
         return res.status(500).send(`서버 에러: ${error}`)
     }
 
@@ -187,6 +204,7 @@ router.get('/is-verified', async(req, res) => {
     const {data, error} = await supabaseAdmin.auth.admin.getUserById(req.query.id);
 
     if (error) {
+        console.error('[에러] GET /auth/is-verified:', error);
         return res.status(500).json({error: error.message});
     }
 
@@ -205,11 +223,12 @@ router.get('/resend-signup-verification', async (req, res) => {
             email: req.query.email,
         })
         if (error) {
-            console.error("이메일 인증 재전송 오류:", error);
+            console.error('[에러] GET /auth/resend-signup-verification: 이메일 인증 재전송 오류', error);
             return res.status(400).json({error: "이메일 인증 재전송에 실패했습니다."});
         }
         return res.status(200).json({message: "이메일 인증 재전송 성공"});
     } catch (error) {
+        console.error('[에러] GET /auth/resend-signup-verification: try-catch', error);
         return res.status(500).json({error: "서버 오류"});
     }
 })
@@ -220,6 +239,7 @@ router.get('/reset-password', async (req, res) => {
     console.log('[라우트 호출] GET /auth/reset-password');
     const email = req.query.email;
     if (!email) {
+        console.error('[에러] GET /auth/reset-password: 이메일 누락', req.query);
         return res.status(400).json({error: "이메일이 필요합니다."});
     }
     try {
@@ -227,11 +247,12 @@ router.get('/reset-password', async (req, res) => {
             redirectTo: `${process.env.API_URL}/auth/confirm-password-reset`
         });
         if (error) {
-            console.error("비밀번호 변경 요청 오류:", error);
+            console.error('[에러] GET /auth/reset-password: 비밀번호 변경 요청 오류', error);
             return res.status(400).json({error: "비밀번호 변경 요청에 실패했습니다."});
         }
         return res.status(200).json({message: "변경 이메일이 전송되었습니다."});
     } catch (error) {
+        console.error('[에러] GET /auth/reset-password: try-catch', error);
         return res.status(500).json({error: "서버 오류"});
     }
 })
@@ -246,6 +267,7 @@ router.get('/confirm-password-reset', async (req, res) => {
     const email = req.query.email;
 
     if (!token_hash || !type || !next || !email) {
+        console.error('[에러] GET /auth/confirm-password-reset: 파라미터 부족', req.query);
         return res.status(400).json({error: "필요한 정보가 부족합니다."});
     }
 
@@ -258,6 +280,7 @@ router.get('/confirm-password-reset', async (req, res) => {
             return res
             .cookie('Authorization', `Bearer ${data.session.access_token}`, {httpOnly: true})
             .cookie('Refresh', `Bearer ${data.session.refresh_token}`, {httpOnly: true})
+            .cookie('ID', data.user.id, {httpOnly: true})
             .redirect(303, `/${next.slice(1)}`)
         }
     }
@@ -272,33 +295,36 @@ router.get('/confirm-password-reset', async (req, res) => {
 router.post('/reset-password', async (req, res) => {
     console.log('[라우트 호출] POST /auth/reset-password');
     console.log(req.body)
-    const access_token = req.cookies['Authorization']?.split(' ')[1];
-    const refresh_token = req.cookies['Refresh']?.split(' ')[1];
-    await supabase.auth.setSession({refresh_token: refresh_token, access_token: access_token});
     const new_password = req.body.password;
 
     if (!new_password) {
+        console.error('[에러] POST /auth/reset-password: 비밀번호 누락', req.body);
         return res.status(400).json({error: "필요한 정보가 부족합니다."});
     }
 
     try {
-        const { error } = await supabase.auth.updateUser({
-            password: new_password
-        });
+        const { error } = await supabaseAdmin.auth.admin.updateUserById(
+            req.cookies.ID,
+            {
+                password: new_password
+            }
+        );
         
         // 비밀번호가 기존과 같을 시 alert 띄우고 리다이렉트
-        if(error.code === "same_password") {
+        if(error !== null && error.code === "same_password") {
+            console.error('[에러] POST /auth/reset-password: 기존 비밀번호와 동일', error);
             return res
             .send(`<script>alert("기존 비밀번호와 동일합니다. 다른 비밀번호를 입력해주세요."); window.location.href = "/update_password.html";</script>`);
         }
 
         if (error) {
-            console.error("비밀번호 변경 오류:", error.code);
+            console.error('[에러] POST /auth/reset-password: 비밀번호 변경 오류', error);
             return res.status(400).json({error: "비밀번호 변경에 실패했습니다."});
         }
 
         return res.redirect(303, '/celebrate-password-reset.html'); // 비밀번호 변경 성공 페이지로 리다이렉트
-    } catch (error) {
+    } catch (e) {
+        console.error('[에러] POST /auth/reset-password: try-catch', e);
         return res.status(500).json({error: "서버 오류"});
     }
 })
