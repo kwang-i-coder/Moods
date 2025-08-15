@@ -311,7 +311,7 @@ router.post('/reset-password', async (req, res) => {
         );
         
         // 비밀번호가 기존과 같을 시 alert 띄우고 리다이렉트
-        if(error.code === "same_password") {
+        if(error !== null && error.code === "same_password") {
             console.error('[에러] POST /auth/reset-password: 기존 비밀번호와 동일', error);
             return res
             .send(`<script>alert("기존 비밀번호와 동일합니다. 다른 비밀번호를 입력해주세요."); window.location.href = "/update_password.html";</script>`);
@@ -323,8 +323,8 @@ router.post('/reset-password', async (req, res) => {
         }
 
         return res.redirect(303, '/celebrate-password-reset.html'); // 비밀번호 변경 성공 페이지로 리다이렉트
-    } catch (error) {
-        console.error('[에러] POST /auth/reset-password: try-catch', error);
+    } catch (e) {
+        console.error('[에러] POST /auth/reset-password: try-catch', e);
         return res.status(500).json({error: "서버 오류"});
     }
 })
