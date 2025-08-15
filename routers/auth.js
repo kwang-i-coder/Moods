@@ -258,6 +258,7 @@ router.get('/confirm-password-reset', async (req, res) => {
             return res
             .cookie('Authorization', `Bearer ${data.session.access_token}`, {httpOnly: true})
             .cookie('Refresh', `Bearer ${data.session.refresh_token}`, {httpOnly: true})
+            .cookie('ID', data.user.id, {httpOnly: true})
             .redirect(303, `/${next.slice(1)}`)
         }
     }
@@ -272,9 +273,6 @@ router.get('/confirm-password-reset', async (req, res) => {
 router.post('/reset-password', async (req, res) => {
     console.log('[라우트 호출] POST /auth/reset-password');
     console.log(req.body)
-    const access_token = req.cookies['Authorization']?.split(' ')[1];
-    const refresh_token = req.cookies['Refresh']?.split(' ')[1];
-    await supabase.auth.setSession({refresh_token: refresh_token, access_token: access_token});
     const new_password = req.body.password;
 
     if (!new_password) {
@@ -282,9 +280,12 @@ router.post('/reset-password', async (req, res) => {
     }
 
     try {
-        const { error } = await supabase.auth.updateUser({
-            password: new_password
-        });
+        const { error } = await supabaseAdmin.auth.admin.updateUserById(
+            req.cookies.ID,
+            {
+                password: new_password
+            }
+        );
         
         // 비밀번호가 기존과 같을 시 alert 띄우고 리다이렉트
         if(error.code === "same_password") {
@@ -299,6 +300,7 @@ router.post('/reset-password', async (req, res) => {
 
         return res.redirect(303, '/celebrate-password-reset.html'); // 비밀번호 변경 성공 페이지로 리다이렉트
     } catch (error) {
+        console.log(error.message)
         return res.status(500).json({error: "서버 오류"});
     }
 })
