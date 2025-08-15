@@ -17,12 +17,14 @@ router.get("/", verifySupabaseJWT, async (req, res) => {
                 .setHeader('Authorization', req.headers.authorization);
 
             if (error) {
+                console.error('[에러] GET /feedback (space_id):', error);
                 return res.status(500).json({ error: "피드백 데이터를 가져오는 데 실패했습니다." + error.message });
             }
 
             // 성공적으로 데이터를 가져온 경우
             return res.status(200).json({seuccess: true, data: data});
         } catch (error) {
+            console.error('[에러] GET /feedback (space_id) try-catch:', error);
             return res.status(500).json({ error: "서버 오류" });
         }
     }else{
@@ -34,12 +36,14 @@ router.get("/", verifySupabaseJWT, async (req, res) => {
                 .setHeader('Authorization', req.headers.authorization);
 
             if (error) {
+                console.error('[에러] GET /feedback (all):', error);
                 return res.status(500).json({ error: "피드백 데이터를 가져오는 데 실패했습니다."+ error.message });
             }
 
             // 성공적으로 데이터를 가져온 경우
             return res.status(200).json({seuccess: true, data: data});
         } catch (error) {
+            console.error('[에러] GET /feedback (all) try-catch:', error);
             return res.status(500).json({ error: "서버 오류" });
         }
     }
@@ -50,6 +54,7 @@ router.post("/", verifySupabaseJWT, async (req, res) => {
     const { wifi_score, power, comment, noise_level, crowdness, space_id } = req.body;
 
     if (!wifi_score || (power===null) || !comment || !noise_level || !crowdness || !space_id) {
+        console.error('[에러] POST /feedback: 필드 누락', req.body);
         return res.status(400).json({ error: "모든 필드를 입력해야 합니다." });
     }
 
@@ -62,12 +67,14 @@ router.post("/", verifySupabaseJWT, async (req, res) => {
             .setHeader('Authorization', req.headers.authorization);
 
         if (error) {
+            console.error('[에러] POST /feedback: insert error', error);
             return res.status(500).json({ error: "피드백 데이터를 저장하는 데 실패했습니다." + error.message });
         }
 
         // 성공적으로 데이터를 저장한 경우
         return res.status(201).json({ success: true, data: data });
     } catch (error) {
+        console.error('[에러] POST /feedback: try-catch', error);
         return res.status(500).json({ error: "서버 오류" });
     }
 });
@@ -83,6 +90,7 @@ router.patch("/", verifySupabaseJWT, async (req, res) => {
     }
 
     if (Object.keys(fields_to_update).length === 0) {
+        console.error('[에러] PATCH /feedback: 수정할 필드 없음', req.body);
         return res.status(400).json({ error: "수정할 필드가 없습니다." });
     }
 
@@ -94,12 +102,14 @@ router.patch("/", verifySupabaseJWT, async (req, res) => {
             .setHeader('Authorization', req.headers.authorization);
 
         if (error) {
+            console.error('[에러] PATCH /feedback: update error', error);
             return res.status(500).json({ error: "피드백 데이터를 수정하는 데 실패했습니다." + error.message });
         }
 
         // 성공적으로 데이터를 수정한 경우
         return res.status(200).json({ success: true, data: data });
     } catch (error) {
+        console.error('[에러] PATCH /feedback: try-catch', error);
         return res.status(500).json({ error: "서버 오류" });
     }
 })
