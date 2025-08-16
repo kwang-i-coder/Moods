@@ -75,25 +75,64 @@ router.post('/start', verifySupabaseJWT, async (req, res) => {
 
 // 목표 완료 토글
 router.patch('/goals/:index', verifySupabaseJWT, async (req, res) => {
-    const idx = Number(req.params.index);
-    const {done} = req.body;
-    const key = `sessions:${req.user.sub}`;
-    const sess = await redisClient.hGetAll(key);
+    try {
+        const idx = Number(req.params.index);
+        const {done} = req.body;
+        const key = `sessions:${req.user.sub}`;
+        const sess = await redisClient.hGetAll(key);
 
-    if (Object.keys(sess).length === 0) {
-        return res.status(400).json({error: '세션이 없습니다.'});
+        // 세션 존재 여부 확인
+        if (Object.keys(sess).length === 0) {
+            return res.status(400).json({error: '세션이 없습니다.'});
+        }
+
+        // 세션 상태 확인
+        if (sess.status === 'finished') {
+            return res.status(400).json({ error: '완료된 세션의 목표는 수정할 수 없습니다. '});
+        }
+
+        // 목표 파싱
+        const goals = (() => {
+            try {
+                return JSON.parse(sess.goals || '[]');
+            } catch {
+                return [];
+            }
+        })();
+
+        // 인덱스 유효성 검사
+        if (!Number.isInteger(idx) || idx < 0 || idx >= goals.length) {
+            return res.status(400).json({ error: '잘못된 index입니다.' });
+        }
+
+        // done 값 유효성 검사
+        if (typeof done !== 'boolean') {
+            return res.status(400).json({ error: 'done 값은 boolean이어야 합니다.' });
+        }
+
+        // 목표 상태 업데이트
+        goals[idx].done = done;
+
+
+        await redisClient.hSet(key, { goals: JSON.stringify(goals) });
+        
+        console.log(`목표 ${idx} 상태 변경: ${done} (사용자: ${req.user.sub})`);
+
+        res.json({
+            success: true,
+            goals,
+            updated_goal: {
+                index: idx,
+                text: goals[idx].text,
+                done: goals[idx].done
+            }
+        });
+    } catch (error) {
+        console.error('목표 토글 중 오류', error);
+        res.status(500).json({ error: '서버 오류가 발생했습니다.' });
     }
-
-    const goals = (() => { try { return JSON.parse(sess.goals || '[]'); } catch { return []; } })();
-    if (!Number.isInteger(idx) || idx < 0 || idx >= goals.length) {
-        return res.status(400).json({ error: '잘못된 index' });
-    }
-    goals[idx].done = !!done;                                  
-
-    await redisClient.hSet(key, { goals: JSON.stringify(goals) });
-    res.json({ success: true, goals });
 });
-
+    
 // 공부 세션 일시 정지
 router.get('/pause', verifySupabaseJWT, async (req, res) => {
     console.log('[라우트 호출] /study-sessions/pause')
