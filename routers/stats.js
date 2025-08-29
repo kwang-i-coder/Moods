@@ -150,6 +150,30 @@ router.get('/my-summary/weekly', verifySupabaseJWT, async (req, res) => {
   }
 });
 
+// 총 공부 횟수
+router.get('/my-summary/total', verifySupabaseJWT, async (req, res) => {
+  console.log('[라우터 호출] GET /stats/my-summary/total');
+  try {
+    const userId = req.user.sub;
+
+    const { count, error } = await supabase
+      .from('study_record')
+      .select('id', { count: 'exact', head: true })
+      .eq('user_id', userId)
+      .setHeader('Authorization', req.headers.authorization);
+
+    if (error) throw error;
+
+    return res.json({
+      success: true,
+      total_sessions: count
+    });
+  } catch (err) {
+    console.error('총 공부 횟수 조회 에러:', err);
+    return res.status(500).json({ error: '총 공부 횟수 조회 실패' });
+  }
+});
+
 // 공간별 내 랭킹 조회
 router.get("/my/spaces-ranks", verifySupabaseJWT, async (req, res) => {
     console.log('[라우터 호출] GET /stats/my/spaces-ranks')
@@ -161,10 +185,9 @@ router.get("/my/spaces-ranks", verifySupabaseJWT, async (req, res) => {
             .from("study_record")
             .select("space_id")
             .eq("user_id", userId)
-            .setHeader('Authorization', req.headers.authorization);;
+            .setHeader('Authorization', req.headers.authorization);
 
         if (mySpacesError) throw mySpacesError;
-
 
         const mySpaceIds = [ ...new Set(mySpaces.map(s => s.space_id))];
 
@@ -175,8 +198,9 @@ router.get("/my/spaces-ranks", verifySupabaseJWT, async (req, res) => {
         // 내가 공부한 공간들의 모든 유저 데이터 조회
         const { data: rows, error } = await supabase
             .from("study_record")
-            .select("space_id, user_id, duration")
-            .in("space_id", mySpaceIds); // 필요한 공간만 조회
+            .select("space_id, user_id, duration, spaces!inner(name, image_url)")
+            .in("space_id", mySpaceIds)
+            .setHeader('Authorization', req.headers.authorization);
 
         if (error) throw error;
 
@@ -224,8 +248,12 @@ router.get("/my/spaces-ranks", verifySupabaseJWT, async (req, res) => {
 
             if (myIndex >= 0) {
                 const myStats = userList[myIndex];
+                const spaceInfo = rows.find(r => r.space_id === spaceId && r.user_id === userId)?.spaces;
+
                 myRanks.push({
                     space_id: spaceId,
+                    space_name: spaceInfo?.name || `공간 ${spaceId.substring(0, 8)}`,
+                    space_image_url: spaceInfo?.image_url || null,
                     user_rank: myIndex + 1,
                     total_users: totalUsers,
                     my_study_count: myStats.study_count,
@@ -244,9 +272,11 @@ router.get("/my/spaces-ranks", verifySupabaseJWT, async (req, res) => {
             total_ranked_spaces: myRanks.length
         });
     } catch (err) {
-        console.error(err);
-        return res.status(500).json({ error: '공간 랭킹 조회 실패' });
-    }
+  console.error('에러 메시지:', err);
+  return res.status(500).json({
+    error: '공간 랭킹 조회 실패'
+  });
+}
 });
 
 // 최근 방문한 공간 조회
@@ -432,7 +462,36 @@ router.get('/my/preferred-keywords', verifySupabaseJWT, async (req, res) => {
       .order('created_at', { ascending: false })
       .setHeader('Authorization', req.headers.authorization);
 
+      const { data: spaceMeta, error: spaceMetaError } = await supabase
+        .from('spaces')
+        .select('id, type_tags, mood_tags')
+        .in('id', spaceIds)
+        .setHeader('Authorization', req.headers.authorization);;
+
     if (feedbackError) throw feedbackError;
+    if (spaceMetaError) throw spaceMetaError;
+
+    const typeCount = {};
+    const moodCount = {};
+    spaceMeta.forEach(space => {
+      (space.type_tags || []).forEach(tag => {
+        typeCount[tag] = (typeCount[tag] || 0) + 1;
+      });
+      (space.mood_tags || []).forEach(tag => {
+        moodCount[tag] = (moodCount[tag] || 0) + 1;
+      });
+    });
+
+    // 상위 선호 태그 추출
+    const sortedTags = (tagMap) =>
+      Object.entries(tagMap)
+        .sort((a, b) => b[1] - a[1])
+        .slice(0, 3)
+        .map(([tag, count]) => ({ keyword: tag, count }));
+
+    const preferred_keywords = {};
+    preferred_keywords.type_tags = sortedTags(typeCount);
+    preferred_keywords.mood_tags = sortedTags(moodCount);
 
     // 공간별 이용 통계 계산
     const spaceStats = new Map();
