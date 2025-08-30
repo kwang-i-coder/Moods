@@ -12,19 +12,19 @@ const getTagsForRecords = async (recordIds, authorization) => {
     
     try {
         // record_tags에서 record_id별 tag_id들을 가져옴
-        const { data: recordTags, error: recordTagsError } = await supabase
-            .from("record_tags")
+        const { data: recordTag, error: recordTagError } = await supabase
+            .from("record_tag")
             .select("record_id, tag_id")
             .in("record_id", recordIds)
             .setHeader('Authorization', authorization);
 
-        if (recordTagsError) {
-            console.error("record_tags 조회 오류:", recordTagsError);
+        if (recordTagError) {
+            console.error("record_tags 조회 오류:", recordTagError);
             return {};
         }
 
         // 모든 tag_id를 수집
-        const tagIds = [...new Set(recordTags.map(rt => rt.tag_id))];
+        const tagIds = [...new Set(recordTag.map(rt => rt.tag_id))];
         
         if (tagIds.length === 0) return {};
 
@@ -47,17 +47,17 @@ const getTagsForRecords = async (recordIds, authorization) => {
         });
 
         // record_id별로 태그들을 그룹화
-        const recordTagsMap = {};
-        recordTags.forEach(rt => {
-            if (!recordTagsMap[rt.record_id]) {
-                recordTagsMap[rt.record_id] = [];
+        const recordTagMap = {};
+        recordTag.forEach(rt => {
+            if (!recordTagMap[rt.record_id]) {
+                recordTagMap[rt.record_id] = [];
             }
             if (tagMap[rt.tag_id]) {
-                recordTagsMap[rt.record_id].push(tagMap[rt.tag_id]);
+                recordTagMap[rt.record_id].push(tagMap[rt.tag_id]);
             }
         });
 
-        return recordTagsMap;
+        return recordTagMap;
     } catch (error) {
         console.error("태그 조회 중 오류:", error);
         return {};
@@ -199,10 +199,24 @@ router.get("/records/:id", verifySupabaseJWT, async (req, res) => {
 
     try {
         const { data, error } = await supabase
-            .from("study_record")
-            .select("*")
+            .from('study_record')
+            .select(`
+                id, title, duration, start_time, end_time,
+                goals,
+                space_id,
+                spaces (id, name, type_tags, mood_tags),
+                record_tag (tag_id),
+                record_emotions (
+                  emotion_id,
+                  emotions (
+                    name
+                  )
+                ),
+                record_photos (path)
+            `)
             .eq("id", id)
-            .setHeader('Authorization', req.headers.authorization)
+            .maybeSingle()
+            .setHeader('Authorization', req.headers.authorization);
 
         if (error) {
             return res.status(400).json({ error: error.message });
@@ -216,7 +230,7 @@ router.get("/records/:id", verifySupabaseJWT, async (req, res) => {
         // 해당 레코드의 태그 정보 추가
         const tagsMap = await getTagsForRecords([id], req.headers.authorization);
         const recordWithTags = {
-            ...data[0],
+            ...data,
             tags: tagsMap[id] || []
         };
 
