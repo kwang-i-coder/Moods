@@ -570,10 +570,7 @@ router.post('/session-to-record', verifySupabaseJWT, async (req, res) => {
     start_time: start_time.toISOString(),
     end_time: end_time.toISOString(),
     goals,
-    wifi_score: wifi_score ?? null,
-    noise_level: noise_level ?? null,
-    crowdness: crowdness ?? null,
-    power: (power === null || power === undefined) ? null : !!power
+    feedback_id: null // placeholder to be updated later
   };
 
   const { data: recordRows, error: recordErr } = await supabase
@@ -585,6 +582,33 @@ router.post('/session-to-record', verifySupabaseJWT, async (req, res) => {
   if (recordErr) return res.status(500).json({ error: `study_record insert 실패: ${recordErr.message}` });
 
   const recordId = recordRows[0].id;
+
+  // feedback 저장
+  const { data: feedbackRows, error: feedbackErr } = await supabase
+    .from('feedback')
+    .insert({
+      user_id: req.user.sub,
+      space_id: space_id || null,
+      wifi_score: wifi_score ?? null,
+      noise_level: noise_level ?? null,
+      crowdness: crowdness ?? null,
+      power: (power === null || power === undefined) ? null : !!power
+    })
+    .select()
+    .setHeader('Authorization', req.headers.authorization);
+
+  if (feedbackErr) return res.status(500).json({ error: `feedback insert 실패: ${feedbackErr.message}` });
+
+  const feedbackId = feedbackRows[0]?.id;
+
+  // study_record 업데이트 (feedback_id)
+  const { error: updateErr } = await supabase
+    .from('study_record')
+    .update({ feedback_id: feedbackId })
+    .eq('id', recordId)
+    .setHeader('Authorization', req.headers.authorization);
+
+  if (updateErr) return res.status(500).json({ error: `feedback_id update 실패: ${updateErr.message}` });
 
   // Record-emotions 저장
   if (labelCandidates.length) {
@@ -607,6 +631,7 @@ router.post('/session-to-record', verifySupabaseJWT, async (req, res) => {
     success: true,
     data: {
       ...toInsert,
+      feedback_id: feedbackId,
       emotion_tag_ids: labelCandidates // name 기반
     }
   });
