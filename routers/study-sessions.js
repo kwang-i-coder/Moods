@@ -373,6 +373,29 @@ router.delete('/goals/:index', verifySupabaseJWT, async (req, res) => {
     return res.status(500).json({ error: '서버 오류가 발생했습니다.' });
   }
 });
+
+// 무드 수정
+router.patch('/mood', verifySupabaseJWT, async (req, res) => {
+    const {mood=[]} = req.body;
+    const redis_key = `sessions:${req.user.sub}`;
+    const sess = await redisClient.hGetAll(redis_key);
+    // 세션 존재 여부 확인
+    if (Object.keys(sess).length === 0) {
+      return res.status(400).json({ error: '세션이 없습니다.' });
+    } 
+    try {
+        // 세션 상태에 무드 업데이트
+        await redisClient.hSet(redis_key, { mood_id: JSON.stringify(mood) });
+
+    } catch (error) {
+        console.error('무드 수정 중 오류', error);
+        return res.status(500).json({ error: '서버 오류가 발생했습니다.' });
+    }
+    res.status(200).json({
+        success: true,
+        mood
+    });
+})
     
 // 공부 세션 일시 정지
 router.get('/pause', verifySupabaseJWT, async (req, res) => {
