@@ -186,11 +186,11 @@ router.post('/start', verifySupabaseJWT, async (req, res) => {
 
   const {
     goals = [],
-    mood_id = null, 
+    mood_id = [], 
   } = req.body;
 
-  if (mood_id !== null && typeof mood_id !== 'string') {
-    return res.status(400).json({ error: 'mood_id는 문자열(id)이어야 합니다.' });
+  if (!Array.isArray(mood_id)) {
+    return res.status(400).json({ error: 'mood_id는 배열이어야 합니다.' });
   }
 
   // goals 정규화 (최대 10개)
@@ -207,6 +207,8 @@ router.post('/start', verifySupabaseJWT, async (req, res) => {
 
   const start_time = new Date().toISOString();
   const redis_key = `sessions:${req.user.sub}`;
+
+  // 세션 검증
   const session = await redisClient.hGetAll(redis_key);
   if (Object.keys(session).length !== 0) {
     return res.status(400).send('이미 세션이 존재합니다.');
@@ -218,7 +220,7 @@ router.post('/start', verifySupabaseJWT, async (req, res) => {
     status: 'active',
     accumulatedPauseSeconds: '0',
     goals: JSON.stringify(goalsNorm),
-    mood_id: mood_id || ''   
+    mood_id: JSON.stringify(mood_id)
   });
 
   return res.status(200).json({
@@ -376,7 +378,7 @@ router.delete('/goals/:index', verifySupabaseJWT, async (req, res) => {
 
 // 무드 수정
 router.patch('/mood', verifySupabaseJWT, async (req, res) => {
-    const {mood=[]} = req.body;
+    const {mood_id=[]} = req.body;
     const redis_key = `sessions:${req.user.sub}`;
     const sess = await redisClient.hGetAll(redis_key);
     // 세션 존재 여부 확인
@@ -385,7 +387,7 @@ router.patch('/mood', verifySupabaseJWT, async (req, res) => {
     } 
     try {
         // 세션 상태에 무드 업데이트
-        await redisClient.hSet(redis_key, { mood_id: JSON.stringify(mood) });
+        await redisClient.hSet(redis_key, { mood_id: JSON.stringify(mood_id) });
 
     } catch (error) {
         console.error('무드 수정 중 오류', error);
@@ -393,7 +395,7 @@ router.patch('/mood', verifySupabaseJWT, async (req, res) => {
     }
     res.status(200).json({
         success: true,
-        mood
+        mood_id: mood_id
     });
 })
     
@@ -565,6 +567,8 @@ router.post('/session-to-record', verifySupabaseJWT, async (req, res) => {
 
   // goals 파싱
   const goals = (() => { try { return JSON.parse(session.goals || '[]'); } catch { return []; } })();
+  // mood_id 파싱
+  const mood_id = (() => { try { return JSON.parse(session.mood_id || '[]'); } catch { return []; } })();
 
   // 시간/지속
   const start_time = new Date(session.start_time);
@@ -598,7 +602,7 @@ router.post('/session-to-record', verifySupabaseJWT, async (req, res) => {
 
   const { data: recordRows, error: recordErr } = await supabase
     .from('study_record')
-    .insert(toInsert)
+    .upsert(toInsert)
     .select()
     .setHeader('Authorization', req.headers.authorization);
 
@@ -609,7 +613,7 @@ router.post('/session-to-record', verifySupabaseJWT, async (req, res) => {
   // feedback 저장
   const { data: feedbackRows, error: feedbackErr } = await supabase
     .from('feedback')
-    .insert({
+    .upsert({
       user_id: req.user.sub,
       space_id: space_id || null,
       wifi_score: wifi_score ?? null,
@@ -620,7 +624,10 @@ router.post('/session-to-record', verifySupabaseJWT, async (req, res) => {
     .select()
     .setHeader('Authorization', req.headers.authorization);
 
-  if (feedbackErr) return res.status(500).json({ error: `feedback insert 실패: ${feedbackErr.message}` });
+  if (feedbackErr) {
+    await supabase.from('study_record').delete().eq('id', recordId).setHeader('Authorization', req.headers.authorization);
+    return res.status(500).json({ error: `feedback insert 실패: ${feedbackErr.message}` });
+  }
 
   const feedbackId = feedbackRows[0]?.id;
 
@@ -631,19 +638,49 @@ router.post('/session-to-record', verifySupabaseJWT, async (req, res) => {
     .eq('id', recordId)
     .setHeader('Authorization', req.headers.authorization);
 
-  if (updateErr) return res.status(500).json({ error: `feedback_id update 실패: ${updateErr.message}` });
+  if (updateErr) {
+    await supabase.from('study_record').delete().eq('id', recordId).setHeader('Authorization', req.headers.authorization);
+    await supabase.from('feedback').delete().eq('id', feedbackId).setHeader('Authorization', req.headers.authorization);
+    return res.status(500).json({ error: `feedback_id update 실패: ${updateErr.message}` });
+  }
 
   // Record-emotions 저장
   if (labelCandidates.length) {
     const rows = labelCandidates.map(name => ({
       record_id: recordId,
-      tag_id: name.trim()
+      emotion_id: name.trim()
     }));
     const { error: reErr } = await supabase
       .from('record_emotions')
       .insert(rows)
       .setHeader('Authorization', req.headers.authorization);
-    if (reErr) return res.status(500).json({ error: `record_emotions insert 실패: ${reErr.message}` });
+    if (reErr) {
+      await supabase.from('study_record').delete().eq('id', recordId).setHeader('Authorization', req.headers.authorization);
+      await supabase.from('feedback').delete().eq('id', feedbackId).setHeader('Authorization', req.headers.authorization);
+      return res.status(500).json({ error: `record_emotions insert 실패: ${reErr.message}` });
+    }
+  }
+  const {error:mood_tags_error, data:mood_tags_data} = await supabase.from('mood_tags').select('*').setHeader('Authorization', req.headers.authorization);
+  if(mood_tags_error){
+    await supabase.from('study_record').delete().eq('id', recordId).setHeader('Authorization', req.headers.authorization);
+    await supabase.from('feedback').delete().eq('id', feedbackId).setHeader('Authorization', req.headers.authorization);
+    return res.status(500).json({ error: `mood_tags select 실패: ${mood_tags_error.message}` });
+  }
+  console.log('mood_tags_data:', mood_tags_data);
+  const mood_to_id = Object.fromEntries(mood_tags_data.map(tag => [tag.mood_id.trim(), tag.id]));
+
+  // 문제 구간
+  const to_insert_mood = mood_id.map(tag_id => ({
+    record_id: recordId,
+    mood_tag_id: mood_to_id[tag_id.trim()]
+  }))
+  console.log('to_insert_mood:', to_insert_mood);
+  const { error: moodErr } = await supabase.from('study_record_mood_tags').insert(to_insert_mood).setHeader('Authorization', req.headers.authorization);
+
+  if (moodErr) {
+    await supabase.from('study_record').delete().eq('id', recordId).setHeader('Authorization', req.headers.authorization);
+    await supabase.from('feedback').delete().eq('id', feedbackId).setHeader('Authorization', req.headers.authorization);
+    return res.status(500).json({ error: `study_record_mood_tags insert 실패: ${moodErr.message}` });
   }
 
   // 세션 제거
@@ -655,7 +692,8 @@ router.post('/session-to-record', verifySupabaseJWT, async (req, res) => {
     data: {
       ...toInsert,
       feedback_id: feedbackId,
-      emotion_tag_ids: labelCandidates // name 기반
+      emotion_tag_ids: labelCandidates ,
+      mood_id
     }
   });
 });
