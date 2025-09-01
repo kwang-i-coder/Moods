@@ -611,9 +611,31 @@ router.post('/session-to-record', verifySupabaseJWT, async (req, res) => {
   const recordId = recordRows[0].id;
 
   // feedback 저장
-  const { data: feedbackRows, error: feedbackErr } = await supabase
+  const {data:exist_feedback, error:exist_err} = await supabase.from('feedback').select('*').eq('user_id', req.user.sub).eq('space_id', space_id).setHeader('Authorization', req.headers.authorization);
+  if(exist_err) return res.status(500).json({ error: `feedback select 실패: ${exist_err.message}` });
+
+  if(exist_feedback && exist_feedback.length > 0){
+    // 기존 피드백이 있는 경우
+    var { data: feedbackRows, error: feedbackErr } = await supabase
     .from('feedback')
-    .upsert({
+    .update({
+      user_id: req.user.sub,
+      space_id: space_id || null,
+      wifi_score: wifi_score ?? null,
+      noise_level: noise_level ?? null,
+      crowdness: crowdness ?? null,
+      power: (power === null || power === undefined) ? null : !!power
+    })
+    .select()
+    .eq('user_id', req.user.sub)
+    .eq('space_id', space_id)
+    .setHeader('Authorization', req.headers.authorization);
+    console.log('기존 피드백:', exist_feedback);
+  }else{
+    // 기존 피드백이 없는 경우
+    var { data: feedbackRows, error: feedbackErr } = await supabase
+    .from('feedback')
+    .insert({
       user_id: req.user.sub,
       space_id: space_id || null,
       wifi_score: wifi_score ?? null,
@@ -623,6 +645,10 @@ router.post('/session-to-record', verifySupabaseJWT, async (req, res) => {
     })
     .select()
     .setHeader('Authorization', req.headers.authorization);
+    console.log('기존 피드백 없음');
+  }
+
+  
 
   if (feedbackErr) {
     await supabase.from('study_record').delete().eq('id', recordId).setHeader('Authorization', req.headers.authorization);
