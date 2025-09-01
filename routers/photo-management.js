@@ -5,7 +5,9 @@ import sharp from "sharp";
 import supabase from "../lib/supabaseClient.js";
 import supabaseAdmin from "../lib/supabaseAdmin.js";
 import verifySupabaseJWT from "../lib/verifyJWT.js";
+import redisClient from "../lib/redisClient.js";
 import { title } from "process";
+import { url } from "inspector";
 
 const router = express.Router();
 
@@ -257,23 +259,74 @@ router.delete('/:photoId', verifySupabaseJWT, async (req, res) => {
     }
 });
 
-router.get('/wallpaper', async (req, res) => {
-    const {query} = req.query;
-    if(!query) {
-        return res.status(400).json({error: "검색어가 필요합니다."});
+router.get('/wallpaper', verifySupabaseJWT, async (req, res) => {
+    // const header = {
+    //     "Content-Type": "application/json",
+    // }
+    // const body = {
+    //     title: query.trim()
+    // }
+    // const response = await fetch("http://localhost:8000/tasks/wallpaper", {method:"POST", headers:header, body:JSON.stringify(body)})
+
+    const redis_key = `sessions:${req.user.sub}`
+    const sess = await redisClient.hGetAll(redis_key);
+    if(Object.keys(sess).length === 0) return res.status(400).json({ error: '세션이 없습니다.' });
+
+    const mood_id = JSON.parse(sess.mood_id).map(tag => tag.trim()) || [];
+    if(mood_id.length === 0){
+        const { data:url, error } = await supabaseAdmin
+            .storage
+            .from('wallpaper')
+            .createSignedUrl('general/Rectangle 34627910.png', 60)
+
+        if (error) {
+            console.error('Wallpaper URL 생성 실패:', error);
+            return res.status(500).json({ error: 'Wallpaper URL 생성 실패' });
+        }
+        return res.json({ success: true, data:{url: url.signedUrl }});
     }
-    const header = {
-        "Content-Type": "application/json",
+
+    const { data:mood_tags_data, error:mood_tags_error } = await supabaseAdmin
+        .from('mood_tags')
+        .select('*')
+    if (mood_tags_error) {
+        console.error('Mood tags 조회 실패:', mood_tags_error);
+        return res.status(500).json({ error: 'Mood tags 조회 실패' });
     }
-    const body = {
-        title: query.trim()
+    console.log('mood_tags_data:', mood_tags_data);
+
+    const kr_to_en = Object.fromEntries(mood_tags_data.map(tag => [tag.mood_id.trim(), tag.tag_en.trim()]));
+    console.log('kr_to_en:', kr_to_en);
+    const mood_id_en = mood_id.map(id => kr_to_en[id] || id)
+    console.log('mood_id_en:', mood_id_en);
+    let wallpaper_name = []
+
+    for(const tag of mood_id_en){
+        const { data, error } = await supabaseAdmin
+            .storage
+            .from('wallpaper')
+            .list(tag, {
+                limit: 100,
+                offset: 0,
+                sortBy: { column: 'name', order: 'asc' },
+            })
+        if (error) {
+            console.error('Wallpaper 목록 조회 실패:', error);
+            return res.status(500).json({ error: 'Wallpaper 목록 조회 실패' });
+        }
+        const names = data.map(item => `${tag}/${item.name}`);
+        wallpaper_name.push(...names);
     }
-    const response = await fetch("http://localhost:8000/tasks/wallpaper", {method:"POST", headers:header, body:JSON.stringify(body)})
-    const data = await response.json();
-    return res.status(200).json({
-        success: true,
-        data: data
-    })
+    console.log('선택된 Wallpaper 후보:', wallpaper_name);
+    // 랜덤으로 하나 전송
+    const randomWallpaper = wallpaper_name[Math.floor(Math.random() * wallpaper_name.length)];
+    console.log('선택된 랜덤 Wallpaper:', randomWallpaper);
+    const { data: signedUrl, error: urlError } = await supabaseAdmin.storage.from('wallpaper').createSignedUrl(randomWallpaper, 60);
+    if (urlError) {
+        console.error('Wallpaper URL 생성 실패:', urlError);
+        return res.status(500).json({ error: 'Wallpaper URL 생성 실패' });
+    }
+    res.json({ success: true, data: { url: signedUrl.signedUrl } });
 })
 
 export default router;

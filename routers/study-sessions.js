@@ -669,7 +669,6 @@ router.post('/session-to-record', verifySupabaseJWT, async (req, res) => {
   console.log('mood_tags_data:', mood_tags_data);
   const mood_to_id = Object.fromEntries(mood_tags_data.map(tag => [tag.mood_id.trim(), tag.id]));
 
-  // 문제 구간
   const to_insert_mood = mood_id.map(tag_id => ({
     record_id: recordId,
     mood_tag_id: mood_to_id[tag_id.trim()]
