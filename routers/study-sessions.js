@@ -2,6 +2,7 @@ import express from 'express'
 import supabase from '../lib/supabaseClient.js'
 import redisClient from '../lib/redisClient.js'
 import verifySupabaseJWT from '../lib/verifyJWT.js'
+import { v4 as uuidv4 } from "uuid";
 
 
 
@@ -220,7 +221,8 @@ router.post('/start', verifySupabaseJWT, async (req, res) => {
     status: 'active',
     accumulatedPauseSeconds: '0',
     goals: JSON.stringify(goalsNorm),
-    mood_id: JSON.stringify(mood_id)
+    mood_id: JSON.stringify(mood_id),
+    record_id: uuidv4()
   });
 
   return res.status(200).json({
@@ -505,11 +507,11 @@ router.get('/finish', verifySupabaseJWT, async (req, res) => {
     await redisClient.hSet(redis_key, {
         status: 'finished',
         end_time: stopped_at.toISOString(),
-        duration: duration
+        duration: duration,
     });
 
     console.log(`세션 종료됨: ${redis_key}`);
-    return res.status(200).json({success: true, end_time: stopped_at.toISOString(), duration: duration});
+    return res.status(200).json({success: true, end_time: stopped_at.toISOString(), duration: duration, record_id: session.record_id});
 });
 
 router.get('/user-session', verifySupabaseJWT, async (req, res) => {
@@ -590,6 +592,7 @@ router.post('/session-to-record', verifySupabaseJWT, async (req, res) => {
 
   // study record 저장
   const toInsert = {
+    id: session.record_id,
     user_id: req.user.sub,
     space_id: space_id || null,
     title: title ?? null,
@@ -600,15 +603,14 @@ router.post('/session-to-record', verifySupabaseJWT, async (req, res) => {
     feedback_id: null // placeholder to be updated later
   };
 
-  const { data: recordRows, error: recordErr } = await supabase
+  const { error: recordErr } = await supabase
     .from('study_record')
     .upsert(toInsert)
-    .select()
     .setHeader('Authorization', req.headers.authorization);
 
   if (recordErr) return res.status(500).json({ error: `study_record insert 실패: ${recordErr.message}` });
 
-  const recordId = recordRows[0].id;
+  const recordId = session.record_id;
 
   // feedback 저장
   const {data:exist_feedback, error:exist_err} = await supabase.from('feedback').select('*').eq('user_id', req.user.sub).eq('space_id', space_id).setHeader('Authorization', req.headers.authorization);
