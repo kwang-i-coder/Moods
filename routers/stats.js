@@ -15,17 +15,20 @@ const toHMText = (minutes) => {
 };
 
 // 월별 요약
-// GET /stats/my-summary/monthly?year=YYYY
+// GET /stats/my-summary/monthly?year=YYYY&month=MM
 router.get('/my-summary/monthly', verifySupabaseJWT, async (req, res) => {
   console.log('[라우터 호출] GET /stats/my-summary/monthly');
   try {
     const userId = req.user.sub;
     const now = new Date();
-    const year = Number(req.query.year) || now.getFullYear();
+    const kstNow = new Date(now.getTime() + 9 * 60 * 60 * 1000);
+    
+    const year = Number(req.query.year) || kstNow.getFullYear();
+    const month = Number(req.query.month) || (kstNow.getMonth() + 1);
 
-    // 조회 기간 (UTC) — 해당 연도 전체
-    const from = new Date(Date.UTC(year, 0, 1)).toISOString();
-    const to = new Date(Date.UTC(year + 1, 0, 1)).toISOString();
+    // 특정 월 조회
+    const from = new Date(Date.UTC(year, month - 1, 1)).toISOString();
+    const to = new Date(Date.UTC(year, month, 1)).toISOString();
 
     const { data: rows, error } = await supabase
       .from('study_record')
@@ -37,59 +40,68 @@ router.get('/my-summary/monthly', verifySupabaseJWT, async (req, res) => {
 
     if (error) throw error;
 
-    // KST 변환 유틸
-    const toKST = (input) => {
-      const t = new Date(input);
-      return new Date(t.getTime() + 9 * 60 * 60 * 1000);
-    };
-
-    // 1~12월 버킷 초기화
-    const buckets = {};
-    for (let m = 1; m <= 12; m++) {
-      const key = `${year}-${String(m).padStart(2, '0')}`;
-      buckets[key] = { month: key, sessions: 0, total_minutes: 0 };
-    }
-
-    // 집계
+    let sessions = 0;
+    let total_minutes = 0;
+    
     (rows || []).forEach((r) => {
-      const k = toKST(r.start_time);
-      const key = `${k.getFullYear()}-${String(k.getMonth() + 1).padStart(2, '0')}`;
-      const minutes = Number(r.duration || 0) / 60;
-      if (!buckets[key]) buckets[key] = { month: key, sessions: 0, total_minutes: 0, total_hours: 0 };
-      buckets[key].sessions += 1;
-      buckets[key].total_minutes += minutes;
+      sessions += 1;
+      total_minutes += Number(r.duration || 0) / 60;
     });
 
-    const items = Object.values(buckets).map((b) => {
-      const total_minutes = Math.round(b.total_minutes);
-      return {
-        ...b,
+    total_minutes = Math.round(total_minutes);
+    const monthKey = `${year}-${String(month).padStart(2, '0')}`;
+
+    return res.json({ 
+      success: true, 
+      year,
+      month,
+      data: {
+        month: monthKey,
+        sessions,
         total_minutes,
         total_time_text: toHMText(total_minutes)
-      };
+      }
     });
-
-    return res.json({ success: true, year, items });
   } catch (err) {
     console.error(err);
     return res.status(500).json({ error: '월별 통계 조회 실패' });
   }
 });
 
-// 주간 통계
-// GET /stats/my-summary/weekly?from=YYYY-MM-DD&to=YYYY-MM-DD
-// from/to 미지정 시 최근 12주 범위로 기본 조회
+// 주별 요약 (이번 주만 조회, 일요일~토요일)
+// GET /stats/my-summary/weekly
 router.get('/my-summary/weekly', verifySupabaseJWT, async (req, res) => {
   console.log('[라우터 호출] GET /stats/my-summary/weekly');
   try {
     const userId = req.user.sub;
-
     const now = new Date();
-    const defaultTo = now;
-    const defaultFrom = new Date(now.getTime() - 12 * 7 * 24 * 60 * 60 * 1000); // 최근 12주
+    
+    // KST 기준으로 현재 시간 계산
+    const kstNow = new Date(now.getTime() + 9 * 60 * 60 * 1000);
+    
+    // 이번 주 일요일부터 토요일까지 계산 (KST 기준)
+    const getCurrentWeekRange = () => {
+      const current = new Date(kstNow);
+      current.setHours(0, 0, 0, 0);
+      
+      // 일요일 계산 (일요일=0, 월요일=1, ..., 토요일=6)
+      const dayOfWeek = current.getDay(); // 0=일요일, 1=월요일, ..., 6=토요일
+      const sunday = new Date(current);
+      sunday.setDate(current.getDate() - dayOfWeek);
+      
+      // 토요일 계산
+      const saturday = new Date(sunday);
+      saturday.setDate(sunday.getDate() + 6);
+      saturday.setHours(23, 59, 59, 999);
+      
+      return { sunday, saturday };
+    };
 
-    const from = req.query.from ? new Date(req.query.from) : defaultFrom;
-    const to = req.query.to ? new Date(req.query.to) : defaultTo;
+    const { sunday, saturday } = getCurrentWeekRange();
+    
+    // KST를 UTC로 변환
+    const from = new Date(sunday.getTime() - 9 * 60 * 60 * 1000);
+    const to = new Date(saturday.getTime() - 9 * 60 * 60 * 1000);
 
     const fromISO = from.toISOString();
     const toISO = to.toISOString();
@@ -104,46 +116,30 @@ router.get('/my-summary/weekly', verifySupabaseJWT, async (req, res) => {
 
     if (error) throw error;
 
-    const toKST = (input) => {
-      const t = new Date(input);
-      return new Date(t.getTime() + 9 * 60 * 60 * 1000);
-    };
-
-    const weekStartKST = (dateObj) => {
-      const k = new Date(dateObj.getTime());
-      k.setHours(0, 0, 0, 0);
-      const day = (k.getDay() + 6) % 7; // Mon=0, ..., Sun=6
-      k.setDate(k.getDate() - day);
-      return k;
-    };
-
-    // 데이터 집계
-    const buckets = new Map(); // key: YYYY-MM-DD (해당 주 월요일)
+    // 이번 주 집계 (단일 주차만)
+    let sessions = 0;
+    let total_minutes = 0;
+    
     (rows || []).forEach((r) => {
-      const kst = toKST(r.start_time);
-      const ws = weekStartKST(kst);
-      const key = ws.toISOString().slice(0, 10);
-      const minutes = Number(r.duration || 0) / 60;
-      if (!buckets.has(key)) buckets.set(key, { week_start: key, sessions: 0, total_minutes: 0 });
-      const b = buckets.get(key);
-      b.sessions += 1;
-      b.total_minutes += minutes;
+      sessions += 1;
+      total_minutes += Number(r.duration || 0) / 60;
     });
 
-    // 범위 내 주차를 빠짐없이 채우기
-    const startMonday = weekStartKST(toKST(fromISO));
-    const endMonday = weekStartKST(toKST(toISO));
+    total_minutes = Math.round(total_minutes);
+    
+    // 주차 키 생성 (일요일 날짜 기준)
+    const weekKey = sunday.toISOString().slice(0, 10);
 
-    const items = [];
-    for (let d = new Date(startMonday); d <= endMonday; d.setDate(d.getDate() + 7)) {
-      const key = d.toISOString().slice(0, 10);
-      const b = buckets.get(key) || { week_start: key, sessions: 0, total_minutes: 0 };
-      b.total_minutes = Math.round(b.total_minutes);
-      b.total_time_text = toHMText(b.total_minutes);
-      items.push(b);
-    }
+    const weekData = {
+      sessions,
+      total_minutes,
+      total_time_text: toHMText(total_minutes)
+    };
 
-    return res.json({ success: true, from: from.toISOString(), to: to.toISOString(), items });
+    return res.json({ 
+      success: true, 
+      current_week: weekData
+    });
   } catch (err) {
     console.error(err);
     return res.status(500).json({ error: '주별 통계 조회 실패' });
