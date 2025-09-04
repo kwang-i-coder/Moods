@@ -6,12 +6,12 @@ const router = express.Router();
 
 // 공통: 분→"X시간 Y분" 포맷터
 const toHMText = (minutes) => {
-  const m = Math.round(Number(minutes) || 0);
-  const h = Math.floor(m / 60);
-  const rest = m % 60;
-  if (h > 0 && rest > 0) return `${h}시간 ${rest}분`;
-  if (h > 0) return `${h}시간`;
-  return `${m}분`;
+  const totalSeconds = Math.round(Number(minutes) * 60 || 0);
+  const hours = Math.floor(totalSeconds / 3600);
+  const mins = Math.floor((totalSeconds % 3600) / 60);
+  const secs = totalSeconds % 60;
+
+  return `${hours.toString().padStart(2, '0')}:${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
 };
 
 // 월별 요약
