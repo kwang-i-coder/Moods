@@ -275,6 +275,28 @@ router.get("/my/spaces-ranks", verifySupabaseJWT, async (req, res) => {
 }
 });
 
+// 나의 공부 장소 횟수 조회
+router.get('/my-summary/space-count', verifySupabaseJWT, async (req, res) => {
+  console.log('[라우터 호출] GET /stats/my-summary/space-count');
+  try {
+    const userId = req.user.sub;
+    const { data, error } = await supabase
+      .from('study_record')
+      .select('space_id')
+      .eq('user_id', userId)
+      .setHeader('Authorization', req.headers.authorization);
+
+    if (error) throw error;
+
+    const uniqueCount = new Set((data || []).map(r => r.space_id)).size;
+
+    return res.json({ success: true, total_spaces: uniqueCount });
+  } catch (err) {
+    console.error('공간 수 조회 에러:', err);
+    return res.status(500).json({ error: '공간 수 조회 실패' });
+  }
+});
+
 // 최근 방문한 공간 조회
 router.get('/my/recent-spaces', verifySupabaseJWT, async (req, res) => {
   console.log('[라우터 호출] GET /stats/my/recent-spaces');
