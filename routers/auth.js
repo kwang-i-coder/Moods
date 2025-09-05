@@ -329,6 +329,35 @@ router.post('/reset-password', async (req, res) => {
     }
 })
 
+// 토큰 갱신 라우트
+router.post('/refresh-token', async (req, res) => {
+    console.log('[라우트 호출] POST /auth/refresh-token');
+    const { refresh_token } = req.body;
+    if (!refresh_token) {
+        console.error('[에러] POST /auth/refresh-token: 리프레시 토큰 누락', req.body);
+        return res.status(400).json({error: "리프레시 토큰이 필요합니다."});
+    }
+    try {
+        const { data, error } = await supabase.auth.refreshSession({
+            refresh_token: refresh_token
+        });
+        if (error) {
+            console.error('[에러] POST /auth/refresh-token: 토큰 갱신 오류', error);
+            return res.status(400).json({error: "토큰 갱신에 실패했습니다."});
+        }
+        return res.status(200).json({
+            message: "토큰 갱신 성공",
+            session: {
+                access_token: data.session.access_token,
+                refresh_token: data.session.refresh_token,
+            }
+        });
+    } catch (error) {
+        console.error('[에러] POST /auth/refresh-token: try-catch', error);
+        return res.status(500).json({error: "서버 오류"});
+    }
+})
+
 function generateRandomPassword(length = 12, includeUppercase = true, includeNumbers = true, includeSymbols = true) {
   const lowercaseChars = "abcdefghijklmnopqrstuvwxyz";
   const uppercaseChars = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
