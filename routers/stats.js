@@ -15,7 +15,6 @@ const toHMText = (minutes) => {
 };
 
 // 월별 요약
-// GET /stats/my-summary/monthly?year=YYYY&month=MM
 router.get('/my-summary/monthly', verifySupabaseJWT, async (req, res) => {
   console.log('[라우터 호출] GET /stats/my-summary/monthly');
   try {
@@ -41,14 +40,22 @@ router.get('/my-summary/monthly', verifySupabaseJWT, async (req, res) => {
     if (error) throw error;
 
     let sessions = 0;
-    let total_minutes = 0;
+    let total_seconds = 0;
     
     (rows || []).forEach((r) => {
       sessions += 1;
-      total_minutes += Number(r.duration || 0) / 60;
+      total_seconds += Number(r.duration || 0);
     });
 
-    total_minutes = Math.round(total_minutes);
+    // 정수로 변환하여 소수점 제거
+    total_seconds = Math.floor(total_seconds);
+
+    const hours = Math.floor(total_seconds / 3600);
+    const minutes = Math.floor((total_seconds % 3600) / 60);
+    const seconds = total_seconds % 60;
+    
+    const time_display = `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
+    
     const monthKey = `${year}-${String(month).padStart(2, '0')}`;
 
     return res.json({ 
@@ -58,8 +65,7 @@ router.get('/my-summary/monthly', verifySupabaseJWT, async (req, res) => {
       data: {
         month: monthKey,
         sessions,
-        total_minutes,
-        total_time_text: toHMText(total_minutes)
+        time_display 
       }
     });
   } catch (err) {
@@ -69,7 +75,6 @@ router.get('/my-summary/monthly', verifySupabaseJWT, async (req, res) => {
 });
 
 // 주별 요약 (이번 주만 조회, 일요일~토요일)
-// GET /stats/my-summary/weekly
 router.get('/my-summary/weekly', verifySupabaseJWT, async (req, res) => {
   console.log('[라우터 호출] GET /stats/my-summary/weekly');
   try {
@@ -99,7 +104,6 @@ router.get('/my-summary/weekly', verifySupabaseJWT, async (req, res) => {
 
     const { sunday, saturday } = getCurrentWeekRange();
     
-    // KST를 UTC로 변환
     const from = new Date(sunday.getTime() - 9 * 60 * 60 * 1000);
     const to = new Date(saturday.getTime() - 9 * 60 * 60 * 1000);
 
@@ -116,24 +120,25 @@ router.get('/my-summary/weekly', verifySupabaseJWT, async (req, res) => {
 
     if (error) throw error;
 
-    // 이번 주 집계 (단일 주차만)
     let sessions = 0;
-    let total_minutes = 0;
+    let total_seconds = 0;
     
     (rows || []).forEach((r) => {
       sessions += 1;
-      total_minutes += Number(r.duration || 0) / 60;
+      total_seconds += Number(r.duration || 0);
     });
 
-    total_minutes = Math.round(total_minutes);
-    
-    // 주차 키 생성 (일요일 날짜 기준)
-    const weekKey = sunday.toISOString().slice(0, 10);
+    total_seconds = Math.floor(total_seconds);
 
+    const hours = Math.floor(total_seconds / 3600);
+    const minutes = Math.floor((total_seconds % 3600) / 60);
+    const seconds = total_seconds % 60;
+    
+    const time_display = `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
+    
     const weekData = {
       sessions,
-      total_minutes,
-      total_time_text: toHMText(total_minutes)
+      time_display
     };
 
     return res.json({ 
