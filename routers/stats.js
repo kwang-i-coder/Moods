@@ -256,22 +256,28 @@ router.get("/my/spaces-ranks", verifySupabaseJWT, async (req, res) => {
             if (myIndex >= 0) {
                 const myStats = userList[myIndex];
                 const spaceInfo = rows.find(r => r.space_id === spaceId && r.user_id === userId)?.spaces;
-                if(!validate(spaceId)) {
+                if (!validate(spaceId)) {
+                  console.log("space_id: ", spaceId)
                   try {
-                    const place_data = await fetch(`https://places.googleapis.com/v1/places/${spaceId}?languageCode=ko&regionCode=kr`, {method: 'GET', headers: googleApiHeaders});
+                    const place_data = await fetch(
+                      `https://places.googleapis.com/v1/places/${spaceId}?languageCode=ko&regionCode=kr`, 
+                      {
+                        method: 'GET',
+                        headers: googleApiHeaders
+                      }
+                    );
                     if (!place_data.ok) {
                       throw new Error(`Google Places API error: ${place_data.status}`);
                     }
                     const place_json = await place_data.json();
-                    spaceInfo.name = place_json.displayName || `이름을 불러올 수 없음`;
+                    spaceInfo.name = place_json.displayName.text;
                   } catch (apiErr) {
                     console.error('Google Places API 호출 실패:', apiErr);
-                    spaceInfo.name = `이름을 불러올 수 없음`;
                   }
                 }
 
                 myRanks.push({
-                    space_name: spaceInfo?.name || '이름을 불러올 수 없음',
+                    space_name: spaceInfo?.name,
                     space_image_url: spaceInfo?.image_url || null,
                     my_study_count: myStats.study_count,
                     my_total_minutes: myStats.total_minutes,
