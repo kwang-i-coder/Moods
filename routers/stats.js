@@ -257,12 +257,21 @@ router.get("/my/spaces-ranks", verifySupabaseJWT, async (req, res) => {
                 const myStats = userList[myIndex];
                 const spaceInfo = rows.find(r => r.space_id === spaceId && r.user_id === userId)?.spaces;
                 if(!validate(spaceId)) {
-                  const place_data = await fetch(`https://places.googleapis.com/v1/places/${spaceId}?languageCode=ko&regionCode=kr`, {method: 'GET', headers: googleApiHeaders});
-                  spaceInfo.name = (await place_data.json()).displayName || `공부 공간`;
+                  try {
+                    const place_data = await fetch(`https://places.googleapis.com/v1/places/${spaceId}?languageCode=ko&regionCode=kr`, {method: 'GET', headers: googleApiHeaders});
+                    if (!place_data.ok) {
+                      throw new Error(`Google Places API error: ${place_data.status}`);
+                    }
+                    const place_json = await place_data.json();
+                    spaceInfo.name = place_json.displayName || `이름을 불러올 수 없음`;
+                  } catch (apiErr) {
+                    console.error('Google Places API 호출 실패:', apiErr);
+                    spaceInfo.name = `이름을 불러올 수 없음`;
+                  }
                 }
 
                 myRanks.push({
-                    space_name: spaceInfo?.name || '공부 공간',
+                    space_name: spaceInfo?.name || '이름을 불러올 수 없음',
                     space_image_url: spaceInfo?.image_url || null,
                     my_study_count: myStats.study_count,
                     my_total_minutes: myStats.total_minutes,
