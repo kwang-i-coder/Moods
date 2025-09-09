@@ -577,18 +577,33 @@ router.post('/session-to-record', verifySupabaseJWT, async (req, res) => {
   const end_time = new Date(session.end_time);
   const duration = Number(session.duration);
 
-  const { resolvedIds, notFound, labelCandidates } = await (async () => {
+  const { labelCandidates } = await (async () => {
     const isUuid = (s) =>
       typeof s === 'string' &&
       /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(s);
     const inputs = Array.isArray(emotion_tag_ids)
       ? [...new Set(emotion_tag_ids.map((s) => String(s).trim()).filter(Boolean))]
       : [];
-    const uuidCandidates = inputs.filter(isUuid);
     const labelCandidates = inputs.filter((v) => !isUuid(v));
     const result = await resolveEmotionIds(emotion_tag_ids, req.headers.authorization);
     return { ...result, labelCandidates };
   })();
+
+  // db에 없는 공간에서 공부한 경우(공간에서 최초로 공부한 경우)를 대비하여 upsert 진행
+  try {
+    const {error: spaceErr} = await supabase
+      .from('spaces')
+      .upsert({
+        id: space_id,
+      })
+      .setHeader('Authorization', req.headers.authorization);
+    if(spaceErr) {
+      console.error('spaces upsert 실패:', spaceErr);
+      return res.status(500).json({ error: `spaces upsert 실패: ${spaceErr.message}` });
+    }
+  } catch (error) {
+    return res.status(500).json({ error: '서버 오류가 발생했습니다.' });
+  }
 
   // study record 저장
   const toInsert = {
