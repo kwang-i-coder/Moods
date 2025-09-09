@@ -1,6 +1,8 @@
 import express from 'express';
 import supabase from '../lib/supabaseClient.js';
 import verifySupabaseJWT from '../lib/verifyJWT.js';
+import { validate } from 'uuid';
+
 
 const router = express.Router();
 
@@ -232,6 +234,11 @@ router.get("/my/spaces-ranks", verifySupabaseJWT, async (req, res) => {
 
         // 공간별 랭킹 계산 후 내 순위 추출
         const myRanks = [];
+        const googleApiHeaders = {
+            "Content-Type": "application/json",
+            "X-Goog-Api-Key": process.env.GOOGLE_API_KEY,
+            "X-Goog-FieldMask": "displayName",
+        };
         
         for (const [spaceId, userMap] of spaceUserStats.entries()) {
             const userList = Array.from(userMap.values());
@@ -244,22 +251,21 @@ router.get("/my/spaces-ranks", verifySupabaseJWT, async (req, res) => {
                 return b.total_minutes - a.total_minutes;
             });
 
-            const totalUsers = userList.length;
             const myIndex = userList.findIndex(user => user.user_id === userId);
 
             if (myIndex >= 0) {
                 const myStats = userList[myIndex];
                 const spaceInfo = rows.find(r => r.space_id === spaceId && r.user_id === userId)?.spaces;
+                if(!validate(spaceId)) {
+                  const place_data = await fetch(`https://places.googleapis.com/v1/places/${spaceId}?languageCode=ko&regionCode=kr`, {method: 'GET', headers: googleApiHeaders});
+                  spaceInfo.name = (await place_data.json()).displayName || `공부 공간`;
+                }
 
                 myRanks.push({
-                    space_id: spaceId,
-                    space_name: spaceInfo?.name || `공간 ${spaceId.substring(0, 8)}`,
+                    space_name: spaceInfo?.name || '공부 공간',
                     space_image_url: spaceInfo?.image_url || null,
-                    user_rank: myIndex + 1,
-                    total_users: totalUsers,
                     my_study_count: myStats.study_count,
                     my_total_minutes: myStats.total_minutes,
-                    rank_percentage: +((myIndex + 1) / totalUsers * 100).toFixed(1)
                 });
             }
         }
