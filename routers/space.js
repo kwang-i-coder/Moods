@@ -8,13 +8,15 @@ const router = express.Router();
 
 router.use(express.json());
 
-router.get('/near', async (req, res) => {
+router.get('/near', verifySupabaseJWT, async (req, res) => {
     console.log('[라우트 호출] GET /spaces/near');
     // 근처 장소 조회 라우트
     var {lat, lng, rad, type} = req.query;
     // lat, lng는 필수 파라미터
     if(!lat || !lng) {
-        return res.status(400).json({error: "위치 정보가 부족합니다."});
+        const err = new Error("위치 정보가 부족합니다.");
+        err.status = 400;
+        return next(err);
     }
     // 선택 파라미터는 기본값 적용
     if(!rad) {
@@ -30,7 +32,7 @@ router.get('/near', async (req, res) => {
     const headers = {
     "Content-Type": "application/json",
     "X-Goog-Api-Key": process.env.GOOGLE_API_KEY,
-    "X-Goog-FieldMask": "places.location,places.id,places.displayName,places.types"
+    "X-Goog-FieldMask": "places.location,places.id,places.displayName,places.types,places.location"
     };
     const data = {
     "includedTypes": type,
@@ -64,6 +66,10 @@ router.get('/near', async (req, res) => {
                 data.space_id = result[idx].id;
                 data.name = result[idx].displayName.text;
                 data.distance = getDistanceFromLatLonInMeters(lat, lng, result[idx].location.latitude, result[idx].location.longitude);
+                data.location = {
+                        lat: result[idx].location?.latitude,
+                        lng: result[idx].location?.longitude
+                    };
                 for(const t of type) {
                     if(result[idx].types.includes(t)) {
                         data.type = t;
@@ -77,7 +83,8 @@ router.get('/near', async (req, res) => {
                     is_public: true,
                 }).select('*').single();
                 if(error) {
-                    res.status(500).send(`upsert error: ${error.message}`);
+                    error.status = 500;
+                    return next(error);
                 }
 
                 // 분위기가 아직 분석되지 않았다면 워커에 작업 넘김
@@ -90,13 +97,43 @@ router.get('/near', async (req, res) => {
             // 거리 기준으로 정렬
             result.sort((a, b) => a.distance - b.distance);
         }
+        var {data: private_spaces, error} = await supabase
+            .from('spaces')
+            .select('*')
+            .eq('is_public', false)
+            .eq('user_id', req.user.sub) // 로그인한 사용자에 한해 개인 장소 포함
+            .setHeader('Authorization', req.headers.authorization);
+        if(error) {
+            error.status = 500;
+            error.message = `개인 장소 조회 실패: ${error.message}`;
+            return next(error);
+        }
+        // 개인 장소 중에서 반경 내에 있는 장소 추가
+        private_spaces = private_spaces.map(space => {
+            return {
+                space_id: space.id,
+                name: space.name,
+                distance: getDistanceFromLatLonInMeters(lat, lng, space.lat, space.lng),
+                location: {
+                    lat: space.lat,
+                    lng: space.lng
+                },
+                type: 'private'
+            }
+        })
+        console.log(private_spaces);
+        private_spaces = private_spaces.filter(space => (space.distance <= rad))
+        
+        result.push(...private_spaces);
+
         return res.status(200).json({
             success: true,
             places: result
         });
     } catch (error) {
-        console.error("근처 장소 조회 오류:", error);
-        return res.status(500).json({error: "서버 오류"});
+        error.status = 500;
+        error.message = "근처 장소 조회 오류: " + error.message;
+        return next(error);
     }
 })
 
@@ -105,7 +142,9 @@ router.get('/detail', verifySupabaseJWT, async (req, res) => {
     // 장소 상세 정보 조회 라우트
     let { space_id } = req.query;
     if (!space_id) {
-        return res.status(400).json({ error: "장소 ID가 필요합니다." });
+        const err = new Error("장소 ID가 필요합니다.");
+        err.status = 400;
+        return next(err);
     }
     if (!Array.isArray(space_id)) {
         space_id = [space_id]; // 단일 ID를 배열로 변환
@@ -121,7 +160,9 @@ router.get('/detail', verifySupabaseJWT, async (req, res) => {
             .setHeader('Authorization', req.headers.authorization);
 
         if (error) {
-            throw new Error(`DB 조회 실패: ${error.message}`);
+            const err = new Error(`DB 조회 실패: ${error.message}`);
+            err.status = 500;
+            return next(err);
         }
 
         const privateSpacesData = [];
@@ -139,7 +180,10 @@ router.get('/detail', verifySupabaseJWT, async (req, res) => {
                 name: space.name,
                 formatted_address: space.address,
                 types: 'private',
-                location: null
+                location: {
+                    lat: space.lat,
+                    lng: space.lng
+                }
             });
         }
 
@@ -180,7 +224,9 @@ router.get('/detail', verifySupabaseJWT, async (req, res) => {
                 });
             } else {
                 const reason = result.reason || `Status: ${result.value?.status}`;
-                console.error("Google Places API 호출 실패:", reason);
+                const err = new Error("Google Places API 호출 실패: " + reason);
+                err.status = 500;
+                return next(err);
             }
         }
 
@@ -189,8 +235,9 @@ router.get('/detail', verifySupabaseJWT, async (req, res) => {
         return res.status(200).json({ success: true, data: allData });
 
     } catch (e) {
-        console.error("장소 상세 정보 처리 중 서버 오류:", e);
-        return res.status(500).json({ error: "서버 오류가 발생했습니다." });
+        e.status = 500;
+        e.message = "장소 상세 정보 처리 중 서버 오류: " + e.message;
+        return next(e);
     }
 });
 
@@ -237,7 +284,6 @@ router.get('/visited', verifySupabaseJWT, async (req, res) => {
     console.log('[라우트 호출] GET /spaces/visited');
     const {from, to} = req.query;
     try {
-        // 사용자 공부 기록에서 방문한 장소 조회
         const {data, error} = await supabase
             .from('visited_spaces')
             .select('space_id')
@@ -245,15 +291,17 @@ router.get('/visited', verifySupabaseJWT, async (req, res) => {
             .lte('recent_visit', to)
             .setHeader('Authorization', req.headers.authorization);
         if (error) {
-            return res.status(400).json({ error: error.message });
+            error.status = 400;
+            return next(error);
         }
         res.json({
             success: true,
             visited_spaces: data.map(item => item.space_id)
         });
     } catch (error) {
-        console.error("방문 장소 조회 오류:", error);
-        return res.status(500).json({error: "서버 오류"});
+        error.status = 500;
+        error.message = "방문 장소 조회 오류: " + error.message;
+        return next(error);
     }
 });
 
@@ -274,8 +322,9 @@ router.patch('/private-spaces/:space_id', verifySupabaseJWT, async (req, res) =>
         .setHeader('Authorization', req.headers.authorization)
         .select();
     if(error){
-        console.error('개인 장소 수정 오류:', error);
-        return res.status(500).json({ error: `개인 장소 수정 실패: ${error.message}` });
+        error.status = 500;
+        error.message = `개인 장소 수정 실패: ${error.message}`;
+        return next(error);
     }
     return res.status(200).json({
         success: true,
@@ -292,7 +341,9 @@ router.post('/favorite', verifySupabaseJWT,async (req, res) => {
     if (is_public) {
         // --- Public Space Logic ---
         if (!space_id) {
-            return res.status(400).json({ error: "공공 장소의 경우 장소 ID(space_id)가 필요합니다." });
+            const err = new Error("공공 장소의 경우 장소 ID(space_id)가 필요합니다.");
+            err.status = 400;
+            return next(err);
         }
         // Ensure the public space exists in our 'spaces' table.
         const { error: spaceError } = await supabase
@@ -301,13 +352,16 @@ router.post('/favorite', verifySupabaseJWT,async (req, res) => {
             .setHeader('Authorization', req.headers.authorization);
 
         if (spaceError) {
-            console.error('공공 장소 정보 upsert 오류:', spaceError);
-            return res.status(500).json({ error: `공간 정보 저장 실패: ${spaceError.message}` });
+            spaceError.status = 500;
+            spaceError.message = `공간 정보 저장 실패: ${spaceError.message}`;
+            return next(spaceError);
         }
     } else {
         // --- Private Space Logic ---
         if (!name || !address) {
-            return res.status(400).json({ error: "개인 장소의 경우 이름(name)과 주소(address)가 필요합니다." });
+            const err = new Error("개인 장소의 경우 이름(name)과 주소(address)가 필요합니다.");
+            err.status = 400;
+            return next(err);
         }
 
         // 사적 장소 중에서 이름이 일치하는 장소가 있는지 조회
@@ -320,8 +374,9 @@ router.post('/favorite', verifySupabaseJWT,async (req, res) => {
             .maybeSingle(); 
 
         if (selectError) {
-            console.error('개인 장소 조회 오류:', selectError);
-            return res.status(500).json({ error: `개인 장소 조회 실패: ${selectError.message}` });
+            selectError.status = 500;
+            selectError.message = `개인 장소 조회 실패: ${selectError.message}`;
+            return next(selectError);
         }
 
         if (existingSpace) {
@@ -334,8 +389,9 @@ router.post('/favorite', verifySupabaseJWT,async (req, res) => {
             const { error: insertError } = await supabase.from('spaces').insert(newSpaceData).setHeader('Authorization', req.headers.authorization);
 
             if (insertError) {
-                console.error('개인 장소 생성 오류:', insertError);
-                return res.status(500).json({ error: `개인 장소 생성 실패: ${insertError.message}` });
+                insertError.status = 500;
+                insertError.message = `개인 장소 생성 실패: ${insertError.message}`;
+                return next(insertError);
             }
         }
     }
@@ -346,18 +402,66 @@ router.post('/favorite', verifySupabaseJWT,async (req, res) => {
         .setHeader('Authorization', req.headers.authorization);
 
     if (favoriteError) {
-        console.error('즐겨찾기 추가 Supabase 오류:', favoriteError);
-        return res.status(500).json({ error: `즐겨찾기 추가 실패: ${favoriteError.message}` });
+        favoriteError.status = 500;
+        favoriteError.message = `즐겨찾기 추가 실패: ${favoriteError.message}`;
+        return next(favoriteError);
     }
 
     return res.status(201).json({ success: true, message: "즐겨찾기에 추가되었습니다.", space_id });
+});
+
+router.post('/private-space', verifySupabaseJWT, async (req, res) => {
+    console.log('[라우트 호출] POST /spaces/private-space');
+    const { name, address, lat, lng } = req.body;
+    if (!name || !address || !lat || !lng) {
+        const err = new Error("개인 장소의 경우 이름(name)과 주소(address), 위도(lat), 경도(lng)가 필요합니다.");
+        err.status = 400;
+        return next(err);
+    }
+    let space_id;
+
+    // 사적 장소 중에서 이름이 일치하는 장소가 있는지 조회
+    const { data: existingSpace, error: selectError } = await supabase
+        .from('spaces')
+        .select('id')
+        .eq('user_id', req.user.sub)
+        .eq('name', name)
+        .eq('is_public', false)
+        .maybeSingle(); 
+
+    if (selectError) {
+        selectError.status = 500;
+        selectError.message = `개인 장소 조회 실패: ${selectError.message}`;
+        return next(selectError);
+    }
+
+    if (existingSpace) {
+        // 기존 장소가 이미 있으면 그 ID를 사용
+        space_id = existingSpace.id;
+    } else {
+        // 새로운 개인 장소 생성
+        space_id = uuidv4();
+        const newSpaceData = { id: space_id, user_id: req.user.sub, name, address, lat, lng, is_public: false };
+        const { error: insertError } = await supabase.from('spaces').insert(newSpaceData).setHeader('Authorization', req.headers.authorization);
+
+        if (insertError) {
+            insertError.status = 500;
+            insertError.message = `개인 장소 생성 실패: ${insertError.message}`;
+            return next(insertError);
+        }
+    }
+
+
+    return res.status(201).json({ success: true, message: "개인 장소가 추가되었습니다.", space_id });
 });
 
 router.delete('/favorite', verifySupabaseJWT, async (req, res) => {
     console.log('[라우트 호출] DELETE /spaces/favorite');
     const { space_id } = req.body;
     if (!space_id) {
-        return res.status(400).json({ error: "장소 ID가 필요합니다." });
+        const err = new Error("장소 ID가 필요합니다.");
+        err.status = 400;
+        return next(err);
     }
 
     // favorite_spaces 테이블에서 사용자-장소 관계 삭제
@@ -369,8 +473,9 @@ router.delete('/favorite', verifySupabaseJWT, async (req, res) => {
     .setHeader('Authorization', req.headers.authorization);
 
     if (error) {
-        console.error('즐겨찾기 삭제 Supabase 오류:', error);
-        return res.status(500).json({ error: `즐겨찾기 삭제 실패: ${error.message}` });
+        error.status = 500;
+        error.message = `즐겨찾기 삭제 실패: ${error.message}`;
+        return next(error);
     }
 
     return res.status(200).json({ success: true, message: "즐겨찾기에서 삭제되었습니다." });
@@ -383,9 +488,17 @@ router.get('/favorite', verifySupabaseJWT, async (req, res) => {
         .from('favorite_spaces') // 테이블명 일관성을 위해 favorite_spaces로 변경
         .select('space_id').setHeader('Authorization', req.headers.authorization);
     if(error){
-        console.error('즐겨찾기 조회 Supabase 오류:', error);
-        return res.status(500).json({ error: `즐겨찾기 조회 실패: ${error.message}` });
+        error.status = 500;
+        error.message = `즐겨찾기 조회 실패: ${error.message}`;
+        return next(error);
     }
+// 에러 핸들링 미들웨어
+router.use((err, req, res, next) => {
+    console.error('[Space Router Error]', err);
+    const status = err.status || 500;
+    const message = status === 400 ? (err.message || '잘못된 요청입니다.') : '서버 오류';
+    res.status(status).json({ error: message });
+});
     return res.status(200).json({
         success: true,
         favorite_spaces: data.map(item => item.space_id)
