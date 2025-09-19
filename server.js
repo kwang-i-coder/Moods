@@ -14,7 +14,6 @@ import stats_router from "./routers/stats.js";
 
 const app = express();
 
-
 // 정적 파일 제공을 위한 미들웨어
 app.use(express.static('public'))
 
@@ -39,4 +38,6 @@ app.get("/", (req, res) => {
     res.send("this is root page");
 })
 
-app.listen(process.env.PORT)
+app.listen(process.env.PORT, () => {
+    console.log(`Server is running on port ${process.env.PORT}`);
+})

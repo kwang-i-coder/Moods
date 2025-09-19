@@ -1,0 +1,26 @@
+version: '3.9'
+
+services:
+  redis:
+    image: jungdae/moods_session:latest
+    container_name: redis
+    ports:
+      - "6379:6379"
+    networks:
+      - app_network
+
+  app:
+    image: jungdae/moods_server:latest
+    container_name: node_app
+    ports:
+      - "3000:3000"
+    env_file:
+      - ./.env
+    depends_on:
+      - redis
+    networks:
+      - app_network
+
+networks:
+  app_network:
+    driver: bridge
