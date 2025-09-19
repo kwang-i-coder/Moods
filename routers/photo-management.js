@@ -6,8 +6,7 @@ import supabase from "../lib/supabaseClient.js";
 import supabaseAdmin from "../lib/supabaseAdmin.js";
 import verifySupabaseJWT from "../lib/verifyJWT.js";
 import redisClient from "../lib/redisClient.js";
-import { title } from "process";
-import { url } from "inspector";
+
 
 const router = express.Router();
 

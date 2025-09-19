@@ -1,7 +1,5 @@
 // express 서버 모듈
 import express from "express";
-import fs from "fs";
-import https from "https";
 // 환경변수 설정
 import "./lib/env.js"
 // 라우터 모듈 불러오기
