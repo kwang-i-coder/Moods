@@ -1,5 +1,7 @@
 // express 서버 모듈
 import express from "express";
+import fs from "fs";
+import https from "https";
 // 환경변수 설정
 import "./lib/env.js"
 // 라우터 모듈 불러오기
@@ -13,7 +15,6 @@ import photo_router from "./routers/photo-management.js";
 import stats_router from "./routers/stats.js";
 
 const app = express();
-
 
 // 정적 파일 제공을 위한 미들웨어
 app.use(express.static('public'))
@@ -39,4 +40,6 @@ app.get("/", (req, res) => {
     res.send("this is root page");
 })
 
-app.listen(process.env.PORT)
+app.listen(process.env.PORT, () => {
+    console.log(`Server is running on port ${process.env.PORT}`);
+})

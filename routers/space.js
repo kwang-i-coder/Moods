@@ -137,7 +137,7 @@ router.get('/near', verifySupabaseJWT, async (req, res) => {
     }
 })
 
-router.get('/detail', verifySupabaseJWT, async (req, res) => {
+router.get('/detail', verifySupabaseJWT, async (req, res, next) => {
     console.log('[라우트 호출] GET /spaces/detail');
     // 장소 상세 정보 조회 라우트
     let { space_id } = req.query;
@@ -493,18 +493,20 @@ router.get('/favorite', verifySupabaseJWT, async (req, res) => {
         error.message = `즐겨찾기 조회 실패: ${error.message}`;
         return next(error);
     }
-// 에러 핸들링 미들웨어
-router.use((err, req, res, next) => {
-    console.error('[Space Router Error]', err);
-    const status = err.status || 500;
-    const message = status === 400 ? (err.message || '잘못된 요청입니다.') : '서버 오류';
-    res.status(status).json({ error: message });
-});
     return res.status(200).json({
         success: true,
         favorite_spaces: data.map(item => item.space_id)
     }); 
 })
+// 에러 핸들링 미들웨어
+router.use((err, req, res, next) => {
+    console.error('[Space Router Error]', err);
+    const status = err.status || 500;
+    const message = status === 400 ? (err.message || '잘못된 요청입니다.') : '서버 오류';
+    return res.status(status).json({ error: message });
+});
+    
+
 
 export default router;
 
