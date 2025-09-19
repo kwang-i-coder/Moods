@@ -422,6 +422,11 @@ router.get('/my/recent-spaces', verifySupabaseJWT, async (req, res) => {
 
     const uniqueSpaces = [];
     const seenSpaceIds = new Set();
+    const googleApiHeaders = {
+            "Content-Type": "application/json",
+            "X-Goog-Api-Key": process.env.GOOGLE_API_KEY,
+            "X-Goog-FieldMask": "displayName",
+        };
 
     for (const record of studyRecords) {
       if (!seenSpaceIds.has(record.space_id) && uniqueSpaces.length < limit) {
@@ -429,7 +434,24 @@ router.get('/my/recent-spaces', verifySupabaseJWT, async (req, res) => {
         
         const kstDate = new Date(new Date(record.start_time).getTime() + 9 * 60 * 60 * 1000);
         const spaceInfo = spaceInfoMap.get(record.space_id);
-        
+
+        try {
+            const place_data = await fetch(
+              `https://places.googleapis.com/v1/places/${record.space_id}?languageCode=ko&regionCode=kr`, 
+              {
+                method: 'GET',
+                headers: googleApiHeaders
+              }
+            );
+            if (!place_data.ok) {
+              throw new Error(`Google Places API error: ${place_data.status}`);
+            }
+            const place_json = await place_data.json();
+            spaceInfo.name = place_json.displayName.text;
+        } catch (apiErr) {
+          console.error('Google Places API 호출 에러:', apiErr);
+        }
+
         uniqueSpaces.push({
           space_id: record.space_id,
           space_name: spaceInfo?.name || `공간 ${record.space_id.substring(0, 8)}`,
