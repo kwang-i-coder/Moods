@@ -410,7 +410,7 @@ router.post('/favorite', verifySupabaseJWT,async (req, res) => {
     return res.status(201).json({ success: true, message: "즐겨찾기에 추가되었습니다.", space_id });
 });
 
-router.post('/private-space', verifySupabaseJWT, async (req, res) => {
+router.post('/private-space', verifySupabaseJWT, async (req, res, next) => {
     console.log('[라우트 호출] POST /spaces/private-space');
     const { name, address, lat, lng } = req.body;
     if (!name || !address || !lat || !lng) {
@@ -427,17 +427,18 @@ router.post('/private-space', verifySupabaseJWT, async (req, res) => {
         .eq('user_id', req.user.sub)
         .eq('name', name)
         .eq('is_public', false)
-        .maybeSingle(); 
+        .setHeader('Authorization', req.headers.authorization)
 
     if (selectError) {
         selectError.status = 500;
         selectError.message = `개인 장소 조회 실패: ${selectError.message}`;
+        console.error(selectError);
         return next(selectError);
     }
 
-    if (existingSpace) {
+    if (existingSpace && existingSpace.length > 0) {
         // 기존 장소가 이미 있으면 그 ID를 사용
-        space_id = existingSpace.id;
+        space_id = existingSpace[0].id;
     } else {
         // 새로운 개인 장소 생성
         space_id = uuidv4();
@@ -452,7 +453,7 @@ router.post('/private-space', verifySupabaseJWT, async (req, res) => {
     }
 
 
-    return res.status(201).json({ success: true, message: "개인 장소가 추가되었습니다.", space_id });
+    return res.status(201).json({ success: true, message: "개인 장소가 업데이트되었습니다.", space_id });
 });
 
 router.delete('/favorite', verifySupabaseJWT, async (req, res) => {

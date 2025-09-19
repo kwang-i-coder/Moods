@@ -2,9 +2,16 @@ import express from "express";
 import supabaseAdmin from "../lib/supabaseAdmin.js";
 import supabase from "../lib/supabaseClient.js"
 import verifySupabaseJWT from "../lib/verifyJWT.js";
+import { v4 as uuidv4 } from "uuid";
 
 const router = express.Router();
 router.use(verifySupabaseJWT);
+
+function isValidUuidV4(uuid) {
+  // UUID v4 정규 표현식
+  const regex = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+  return regex.test(uuid);
+}
 
 //  태그 정보를 가져오는 헬퍼 함수 추가
 const getTagsForRecords = async (recordIds, authorization) => {
@@ -229,6 +236,30 @@ router.get("/records/:id", verifySupabaseJWT, async (req, res) => {
 
         // 해당 레코드의 태그 정보 추가
         const tagsMap = await getTagsForRecords([id], req.headers.authorization);
+        // 장소 이름이 없으면서 id가 uuidv4 형식이 아닌 경우 (구글 플레이스 ID인 경우) 구글 플레이스 API 호출
+        if (data.spaces.name === null && !isValidUuidV4(data.spaces.id)) {
+            try {
+                    const googleApiHeaders = {
+                        "Content-Type": "application/json",
+                        "X-Goog-Api-Key": process.env.GOOGLE_API_KEY,
+                        "X-Goog-FieldMask": "displayName",
+                    };
+                    const place_data = await fetch(
+                      `https://places.googleapis.com/v1/places/${data.spaces.id}?languageCode=ko&regionCode=kr`, 
+                      {
+                        method: 'GET',
+                        headers: googleApiHeaders
+                      }
+                    );
+                    if (!place_data.ok) {
+                      throw new Error(`Google Places API error: ${place_data.status}`);
+                    }
+                    const place_json = await place_data.json();
+                    data.spaces.name = place_json.displayName.text;
+                  } catch (apiErr) {
+                    console.error('Google Places API 호출 실패:', apiErr);
+                  }
+        }
         const recordWithTags = {
             ...data,
             tags: tagsMap[id] || []
