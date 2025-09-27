@@ -347,7 +347,7 @@ router.get('/my/recent-spaces', verifySupabaseJWT, async (req, res) => {
     
     const { data: studyRecords, error: studyError } = await supabase
       .from('study_record')
-      .select('space_id, start_time')
+      .select('space_id, start_time, duration')
       .eq('user_id', userId)
       .order('start_time', { ascending: false })
       .setHeader('Authorization', req.headers.authorization);
@@ -456,7 +456,8 @@ router.get('/my/recent-spaces', verifySupabaseJWT, async (req, res) => {
           space_name: spaceNamesMap[record.space_id] || spaceInfo?.name || '이름 없음',
           space_image_url: spacePhotos[record.space_id] || [],
           last_visit_date: kstDate.toISOString().split('T')[0], // YYYY-MM-DD 형식
-          last_visit_time: record.start_time
+          last_visit_time: record.start_time,
+          duration: Number(record.duration || 0)
         });
       }
     }
