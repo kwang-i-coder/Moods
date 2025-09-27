@@ -18,168 +18,6 @@ function calculate_duration(start_time, end_time, accumulatedPauseSeconds = 0) {
   return Number.isFinite(seconds) ? Math.max(0, seconds) : 0;
 }
 
-async function resolveMoodId(input) { 
-  try { 
-    const raw = (typeof input === 'string' ? input.trim() : ''); 
-    if (!raw) return null; 
-    let { data: direct, error: directErr } = await supabase
-      .from('mood_tags')
-      .select('id')
-      .eq('id', raw)
-      .limit(1); 
-    if (!directErr && Array.isArray(direct) && direct.length > 0) { 
-      return direct[0].id; 
-    }
-    try { 
-      let { data: byName, error: nameErr } = await supabase
-        .from('mood_tags')
-        .select('id')
-        .eq('name', raw)
-        .limit(1); 
-      if (!nameErr && Array.isArray(byName) && byName.length > 0) { 
-        return byName[0].id; 
-      }
-    } catch (_) {} 
-    try { 
-      let { data: byLabel, error: labelErr } = await supabase
-        .from('mood_tags')
-        .select('id')
-        .eq('label', raw)
-        .limit(1); 
-      if (!labelErr && Array.isArray(byLabel) && byLabel.length > 0) { 
-        return byLabel[0].id; 
-      }
-    } catch (_) {} 
-    // 못 찾으면 null 반환
-    return null; 
-  } catch (e) { 
-    console.warn('[resolveMoodId] 실패:', e?.message); 
-    return null; 
-  } 
-}
-
-// 감정 태그 라벨/UUID → tags.id(UUID) 정규화 헬퍼
-async function resolveTagIds(rawInputs, authHeader) {
-  const isUuid = (s) =>
-    typeof s === 'string' &&
-    /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(s);
-
-  const inputs = Array.isArray(rawInputs)
-    ? [...new Set(rawInputs.map((s) => String(s).trim()).filter(Boolean))]
-    : [];
-
-  if (inputs.length === 0) return { resolvedIds: [], notFound: [] };
-
-  const uuidCandidates = inputs.filter(isUuid);
-  const labelCandidates = inputs.filter((v) => !isUuid(v));
-
-  // 1) UUID 후보 중 실제로 존재하는 id만 유지
-  let resolvedIds = [];
-  if (uuidCandidates.length) {
-    try {
-      const { data: idRows, error: idErr } = await supabase
-        .from('tags')
-        .select('id')
-        .in('id', uuidCandidates)
-        .setHeader('Authorization', authHeader);
-      if (!idErr && Array.isArray(idRows)) {
-        resolvedIds.push(...idRows.map((r) => r.id));
-      }
-    } catch (_) {}
-  }
-
-  // 2) 라벨 후보를 다양한 컬럼으로 탐색: name → label → tag → title → text
-  const labelCols = ['name', 'label', 'tag', 'title', 'text'];
-  let foundLabelSet = new Set();
-
-  for (const col of labelCols) {
-    if (!labelCandidates.length) break;
-    try {
-      const { data: rows, error: qErr } = await supabase
-        .from('tags')
-        .select(`id, ${col}`)
-        .in(col, labelCandidates)
-        .setHeader('Authorization', authHeader);
-      if (qErr || !Array.isArray(rows) || rows.length === 0) continue;
-      // 매칭된 것 기록
-      rows.forEach((r) => {
-        if (r?.id) resolvedIds.push(r.id);
-        const val = r?.[col];
-        if (typeof val === 'string') foundLabelSet.add(val);
-      });
-    } catch (_) {
-      // 해당 컬럼이 없어서 실패하면 다음 컬럼으로 시도
-      continue;
-    }
-  }
-
-  // 중복 제거
-  resolvedIds = [...new Set(resolvedIds)];
-  const notFound = labelCandidates.filter((lbl) => !foundLabelSet.has(lbl));
-
-  return { resolvedIds, notFound };
-}
-
-// 감정 텍스트 or UUID → emotions.id 정규화
-async function resolveEmotionIds(rawInputs, authHeader) {
-  const isUuid = (s) =>
-    typeof s === 'string' &&
-    /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(s);
-
-  const inputs = Array.isArray(rawInputs)
-    ? [...new Set(rawInputs.map((s) => String(s).trim()).filter(Boolean))]
-    : [];
-
-  if (inputs.length === 0) return { resolvedIds: [], notFound: [] };
-
-  const uuidCandidates = inputs.filter(isUuid);
-  const labelCandidates = inputs.filter((v) => !isUuid(v));
-
-  let resolvedIds = [];
-  if (uuidCandidates.length) {
-    try {
-      const { data: idRows, error: idErr } = await supabase
-        .from('emotions')
-        .select('id')
-        .in('id', uuidCandidates)
-        .setHeader('Authorization', authHeader);
-      if (!idErr && Array.isArray(idRows)) {
-        resolvedIds.push(...idRows.map((r) => r.id));
-      }
-    } catch (_) {}
-  }
-
-  const labelCols = ['name', 'label', 'text'];
-  let foundLabelSet = new Set();
-
-  for (const col of labelCols) {
-    if (!labelCandidates.length) break;
-    try {
-      const { data: rows, error: qErr } = await supabase
-        .from('emotions')
-        .select(`id, ${col}`)
-        .in(col, labelCandidates)
-        .setHeader('Authorization', authHeader);
-      if (qErr || !Array.isArray(rows)) continue;
-      rows.forEach((r) => {
-        if (r?.id) resolvedIds.push(r.id);
-        const val = r?.[col];
-        if (typeof val === 'string') foundLabelSet.add(val);
-      });
-    } catch (_) {
-      continue;
-    }
-  }
-
-  resolvedIds = [...new Set(resolvedIds)];
-
-  // notFound 계산 방식 순서 조정 및 정확성 개선
-  const inputSet = new Set(inputs.filter(v => !isUuid(v)));
-  const foundSet = new Set(foundLabelSet);
-  const notFound = Array.from(inputSet).filter(lbl => !foundSet.has(lbl));
-
-  return { resolvedIds, notFound };
-}
 
 // 공부 세션 시작 (오늘 할일 + mood만 추가)
 router.post('/start', verifySupabaseJWT, async (req, res) => {
@@ -529,6 +367,7 @@ router.get('/quit', verifySupabaseJWT, async (req, res) => {
 
 // 세션 → 기록 저장
 router.post('/session-to-record', verifySupabaseJWT, async (req, res) => {
+  console.log('[라우트 호출] /study-sessions/session-to-record')
   const {
     title = null,               // 선택
     emotion_tag_ids = [],       // 라벨 or UUID 문자열 배열
@@ -576,18 +415,6 @@ router.post('/session-to-record', verifySupabaseJWT, async (req, res) => {
   const start_time = new Date(session.start_time);
   const end_time = new Date(session.end_time);
   const duration = Number(session.duration);
-
-  const { labelCandidates } = await (async () => {
-    const isUuid = (s) =>
-      typeof s === 'string' &&
-      /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(s);
-    const inputs = Array.isArray(emotion_tag_ids)
-      ? [...new Set(emotion_tag_ids.map((s) => String(s).trim()).filter(Boolean))]
-      : [];
-    const labelCandidates = inputs.filter((v) => !isUuid(v));
-    const result = await resolveEmotionIds(emotion_tag_ids, req.headers.authorization);
-    return { ...result, labelCandidates };
-  })();
 
   // db에 없는 공간에서 공부한 경우(공간에서 최초로 공부한 경우)를 대비하여 upsert 진행
   try {
@@ -687,12 +514,44 @@ router.post('/session-to-record', verifySupabaseJWT, async (req, res) => {
     return res.status(500).json({ error: `feedback_id update 실패: ${updateErr.message}` });
   }
 
+  var emotion_names = emotion_tag_ids.map(s => String(s).trim()).filter(Boolean);
+
+  const emotion_ids = [];
+
+  const {data:emotions, error:emotionsError} = await supabase.from('emotions').select('*').setHeader('Authorization', req.headers.authorization);
+  if(emotionsError) return [];
+
+  var emotion_to_id = Object.fromEntries(emotions.map(emotion => [emotion.name.trim(), emotion.id]));
+
+  // 없는 태그는 삽입
+  emotion_names.forEach(async name => {
+    if(emotion_to_id[name] === undefined){
+      const new_id = uuidv4();
+      const {error:insertErr} = await supabase.from('emotions').insert({id:new_id, name:name}).setHeader('Authorization', req.headers.authorization);
+      if(!insertErr){
+        emotion_to_id[name] = new_id;
+        console.log(`새 감정 태그 삽입 (${name}, ${new_id})`);
+      }else{
+        console.error(`감정 태그 삽입 실패 (${name}):`, insertErr);
+      }
+    }
+  });
+
+  // id로 변환
+  emotion_names.forEach(name => {
+    if(emotion_to_id[name]){
+      emotion_ids.push(emotion_to_id[name]);
+    }
+  });
+
   // Record-emotions 저장
-  if (labelCandidates.length) {
-    const rows = labelCandidates.map(name => ({
+  if (emotion_ids.length) {
+    const rows = emotion_ids.map(id => ({
       record_id: recordId,
-      emotion_id: name.trim()
+      emotion_id: id
     }));
+    console.log('record_emotions에 삽입할 행:', rows);
+    
     const { error: reErr } = await supabase
       .from('record_emotions')
       .insert(rows)
@@ -734,7 +593,7 @@ router.post('/session-to-record', verifySupabaseJWT, async (req, res) => {
     data: {
       ...toInsert,
       feedback_id: feedbackId,
-      emotion_tag_ids: labelCandidates ,
+      emotion_tag_ids: emotion_names,
       mood_id
     }
   });
