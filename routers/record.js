@@ -2,6 +2,7 @@ import express from "express";
 import supabaseAdmin from "../lib/supabaseAdmin.js";
 import supabase from "../lib/supabaseClient.js"
 import verifySupabaseJWT from "../lib/verifyJWT.js";
+import photoTools from "../lib/photoTools.js";
 
 const router = express.Router();
 router.use(verifySupabaseJWT);
@@ -378,6 +379,30 @@ router.get("/records/:id", async (req, res) => {
       for (const p of paths) {
         imageUrl = await signStudyPhotoKeyMaybe(p, Number(process.env.STUDY_PHOTO_URL_TTL_SECONDS || 86400));
         if (imageUrl) break;
+      }
+
+      // 이미지가 없을때 
+      if (!imageUrl) {
+        const rawMood = data?.spaces?.mood_tags;
+        let moodIds = [];
+        if (Array.isArray(rawMood)) {
+          moodIds = rawMood;
+        } else if (typeof rawMood === 'string' && rawMood.trim().length > 0) {
+          try {
+            if (rawMood.trim().startsWith('[')) {
+              const arr = JSON.parse(rawMood);
+              if (Array.isArray(arr)) moodIds = arr;
+            } else {
+              moodIds = rawMood.split(/[,\n;/]/).map(s => s.trim()).filter(Boolean);
+            }
+          } catch (_) {
+            moodIds = rawMood.split(/[,\n;/]/).map(s => s.trim()).filter(Boolean);
+          }
+        }
+        const { url: moodUrl } = await photoTools.getMoodWallpaper(moodIds || []);
+        if (moodUrl) {
+          imageUrl = moodUrl;
+        }
       }
     } catch (e) {
       console.error('이미지 URL 생성 실패:', e);
