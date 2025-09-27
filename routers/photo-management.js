@@ -153,10 +153,6 @@ router.post('/records/:recordId', verifySupabaseJWT, upload.single('file'), asyn
             .select()
             .single()
             .setHeader('Authorization', req.headers.authorization);
-
-            if (updateError) {
-                console.error('업데이트 실패', updateError);
-            }
             
         if (insertError) {
             // Storage 롤백

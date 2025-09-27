@@ -274,11 +274,15 @@ router.get("/records/:id", async (req, res) => {
         record_photos:record_photos ( path ),
 
         spaces:spaces (
-          id, name, type_tags, mood_tags
+          id, name, type_tags
         ),
 
         record_emotions:record_emotions (
           emotions:emotions ( id, name )
+        ),
+
+        record_moods:study_record_mood_tags (
+          mood_tags:mood_tags ( id, mood_id, tag_en )
         )
       `)
       .eq("id", id)
@@ -363,6 +367,89 @@ router.get("/records/:id", async (req, res) => {
       console.error('feedback 조회 실패:', e);
     }
 
+    // Google Places API 기반 타입 처리
+    let placeTypes = [];
+    let placeDisplayName = data.spaces?.name ?? null;
+    if (data.spaces?.name === null && !isValidUuidV4(data.spaces?.id)) {
+      try {
+        const googleApiHeaders = {
+          "Content-Type": "application/json",
+          "X-Goog-Api-Key": process.env.GOOGLE_API_KEY,
+          "X-Goog-FieldMask": "displayName,types",
+        };
+        const placeRes = await fetch(
+          `https://places.googleapis.com/v1/places/${data.spaces.id}?languageCode=ko&regionCode=kr`,
+          { method: 'GET', headers: googleApiHeaders }
+        );
+        if (placeRes.ok) {
+          const placeJson = await placeRes.json();
+          placeDisplayName = placeJson?.displayName?.text ?? data.spaces.id;
+          placeTypes = Array.isArray(placeJson?.types) ? placeJson.types : [];
+        }
+      } catch (apiErr) {
+        console.error('Google Places API 호출 실패:', apiErr);
+      }
+    }
+    if (!Array.isArray(placeTypes) || placeTypes.length === 0) {
+      placeTypes = [];
+    }
+    // Google Place type 
+    function mapGoogleTypeToKorean(type) {
+      const mapping = {
+        'cafe': '카페',
+        'library': '도서관',
+        'restaurant': '식당',
+        'university': '대학교',
+        'school': '학교',
+        'book_store': '서점',
+        'coworking_space': '코워킹스페이스',
+        'coffee_shop': '카페',
+        'study_area': '스터디룸',
+        'internet_cafe': 'PC방',
+        'bar': '술집',
+        'bakery': '베이커리',
+        'fast_food_restaurant': '패스트푸드',
+        'convenience_store': '편의점',
+        'park': '공원',
+        'museum': '박물관',
+        'church': '교회',
+        'amusement_park': '놀이공원',
+        'movie_theater': '영화관',
+        'train_station': '기차역',
+        'bus_station': '버스터미널',
+        'shopping_mall': '쇼핑몰',
+      };
+      if (!type) return null;
+      const lower = type.toLowerCase();
+      if (mapping[lower]) return mapping[lower];
+      if (lower.endsWith('_cafe')) return '카페';
+      if (lower.endsWith('_library')) return '도서관';
+      return null;
+    }
+    let primaryType = null;
+    for (const t of placeTypes) {
+      const mapped = mapGoogleTypeToKorean(t);
+      if (mapped) {
+        primaryType = mapped;
+        break;
+      }
+    }
+
+    const recMoods = Array.isArray(data.record_moods) ? data.record_moods : [];
+    const moodList = [
+      ...new Set(
+        recMoods
+          .map((m) =>
+            (m && m.mood_tags && typeof m.mood_tags.mood_id === 'string'
+              ? m.mood_tags.mood_id.replace(/\r?\n/g, '').trim()
+              : '')
+          )
+          .filter(Boolean)
+      ),
+    ];
+
+    const primaryMood = moodList[0] ?? null;
+
     let imageUrl = null;
     try {
       let paths = Array.isArray(data.record_photos) ? data.record_photos.map(p => p?.path).filter(Boolean) : [];
@@ -384,25 +471,8 @@ router.get("/records/:id", async (req, res) => {
         if (imageUrl) break;
       }
 
-      // 이미지가 없을때 
       if (!imageUrl) {
-        const rawMood = data?.spaces?.mood_tags;
-        let moodIds = [];
-        if (Array.isArray(rawMood)) {
-          moodIds = rawMood;
-        } else if (typeof rawMood === 'string' && rawMood.trim().length > 0) {
-          try {
-            if (rawMood.trim().startsWith('[')) {
-              const arr = JSON.parse(rawMood);
-              if (Array.isArray(arr)) moodIds = arr;
-            } else {
-              moodIds = rawMood.split(/[,\n;/]/).map(s => s.trim()).filter(Boolean);
-            }
-          } catch (_) {
-            moodIds = rawMood.split(/[,\n;/]/).map(s => s.trim()).filter(Boolean);
-          }
-        }
-        const { url: moodUrl } = await photoTools.getMoodWallpaper(moodIds || []);
+        const { url: moodUrl } = await photoTools.getMoodWallpaper(moodList || []);
         if (moodUrl) {
           imageUrl = moodUrl;
         }
@@ -431,25 +501,6 @@ router.get("/records/:id", async (req, res) => {
       }
     }
 
-    const typeTagsRaw = data.spaces?.type_tags ?? null;
-    const moodTagsRaw = data.spaces?.mood_tags ?? null;
-    const parseList = (raw) => {
-      if (!raw) return [];
-      try {
-        if (Array.isArray(raw)) return raw;
-        if (typeof raw === 'string' && raw.trim().startsWith('[')) {
-          const arr = JSON.parse(raw);
-          return Array.isArray(arr) ? arr : [];
-        }
-      } catch (err) {
-        console.error('parseList JSON parse failed:', err);
-      }
-      return String(raw).split(/[,\n;/]/).map(s => s.trim()).filter(Boolean);
-    };
-    const typeList = parseList(typeTagsRaw);
-    const moodList = parseList(moodTagsRaw);
-    const primaryType = typeList[0] ?? null;
-    const primaryMood = moodList[0] ?? null;
 
     const recordCard = {
       id: data.id,
@@ -464,7 +515,7 @@ router.get("/records/:id", async (req, res) => {
       emotions,
       space: {
         id: data.spaces?.id ?? data.space_id ?? null,
-        name: data.spaces?.name ?? null,
+        name: placeDisplayName ?? data.spaces?.name ?? null,
         type: primaryType,
         mood: primaryMood,
         tags: feedbackFields
