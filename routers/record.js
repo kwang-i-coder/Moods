@@ -296,6 +296,9 @@ router.get("/records/:id", async (req, res) => {
     const end = data.end_time ? new Date(data.end_time) : null;
     const totalSec = (start && end) ? Math.max(0, Math.floor((end - start) / 1000)) : 0;
 
+    const netSec = Number.isFinite(Number(data.duration)) ? Math.floor(Number(data.duration)) : 0;
+    const netTime = toHHMMSS(netSec);
+
     const dateStr = data.start_time ? data.start_time.slice(0, 10) : null;
 
     const goals = normalizeGoals(data.goals);
@@ -451,7 +454,10 @@ router.get("/records/:id", async (req, res) => {
     const recordCard = {
       id: data.id,
       date: dateStr,
+      // 총 시간: 시작~종료 전체 경과
       total_time: toHHMMSS(totalSec),
+      // 순 공부 시간: 일시정지 제외(= DB duration)
+      net_time: netTime,
       title: data.title ?? null,
       image_url: imageUrl,
       goals,
