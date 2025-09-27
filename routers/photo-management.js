@@ -153,16 +153,6 @@ router.post('/records/:recordId', verifySupabaseJWT, upload.single('file'), asyn
             .single()
             .setHeader('Authorization', req.headers.authorization);
 
-        const publicUrl = supabaseAdmin.storage
-            .from('study-photos')
-            .getPublicUrl(path).data.publicUrl;
-
-        const { error: updateError } = await supabase
-            .from('study-record')
-            .update({ image_url: publicUrl })
-            .eq('id', recordId)
-            .setHeader('Authorization', req.headers.authorization);
-
             if (updateError) {
                 console.error('업데이트 실패', updateError);
             }

@@ -2,7 +2,6 @@ import express from "express";
 import supabaseAdmin from "../lib/supabaseAdmin.js";
 import supabase from "../lib/supabaseClient.js"
 import verifySupabaseJWT from "../lib/verifyJWT.js";
-import { v4 as uuidv4 } from "uuid";
 
 const router = express.Router();
 router.use(verifySupabaseJWT);
@@ -13,12 +12,85 @@ function isValidUuidV4(uuid) {
   return regex.test(uuid);
 }
 
+// 시간 포맷터: 초 → "HH:MM:SS"
+function toHHMMSS(totalSeconds) {
+  const s = Math.max(0, Math.floor(Number.isFinite(totalSeconds) ? totalSeconds : 0));
+  const hh = String(Math.floor(s / 3600)).padStart(2, '0');
+  const mm = String(Math.floor((s % 3600) / 60)).padStart(2, '0');
+  const ss = String(s % 60).padStart(2, '0');
+  return `${hh}:${mm}:${ss}`;
+}
+
+function normalizeGoals(goals) {
+  if (Array.isArray(goals)) {
+    return goals.map(g => (typeof g === 'string' ? { text: g, done: true } : g));
+  }
+  if (typeof goals === 'string') {
+    const parts = goals.split(/[\n,]/).map(s => s.trim()).filter(Boolean);
+    return parts.map(p => ({ text: p, done: true }));
+  }
+  if (typeof goals === 'object' && goals !== null) {
+    return Array.isArray(goals.items) ? goals.items : [];
+  }
+  return [];
+}
+
+async function signStudyPhotoKeyMaybe(key, ttlSeconds = Number(process.env.STUDY_PHOTO_URL_TTL_SECONDS || 86400)) {
+  if (!key || typeof key !== 'string') return null;
+
+  const variants = [];
+  const trimmed = key.trim();
+
+  variants.push(trimmed);
+
+  if (trimmed.startsWith('study-photos/')) {
+    variants.push(trimmed.replace(/^study-photos\//, ''));
+  }
+
+  if (trimmed.startsWith('/')) {
+    variants.push(trimmed.replace(/^\//, ''));
+  }
+
+  const uniq = [...new Set(variants)].filter(v => v.length > 0);
+
+  const expanded = [];
+  for (const k of uniq) {
+    const last = k.split('/').pop() || '';
+    if (!last.includes('.')) {
+      expanded.push(k + '.jpg');
+      expanded.push(k + '.png');
+      expanded.push(k + '.webp');
+    }
+  }
+  const allCandidates = [...new Set([...uniq, ...expanded])];
+
+  for (const candidate of allCandidates) {
+    const { data: signedData, error: signedError } = await supabaseAdmin
+      .storage
+      .from('study-photos')
+      .createSignedUrl(candidate, ttlSeconds);
+    if (!signedError && signedData?.signedUrl) {
+      return signedData.signedUrl;
+    }
+  }
+
+  for (const candidate of allCandidates) {
+    const { data: signedData2, error: signedError2 } = await supabase
+      .storage
+      .from('study-photos')
+      .createSignedUrl(candidate, ttlSeconds);
+    if (!signedError2 && signedData2?.signedUrl) {
+      return signedData2.signedUrl;
+    }
+  }
+  return null;
+}
+
 //  태그 정보를 가져오는 헬퍼 함수 추가
 const getTagsForRecords = async (recordIds, authorization) => {
     if (!recordIds || recordIds.length === 0) return {};
     
     try {
-        // record_tags에서 record_id별 tag_id들을 가져옴
         const { data: recordTag, error: recordTagError } = await supabase
             .from("record_tag")
             .select("record_id, tag_id")
@@ -30,15 +102,13 @@ const getTagsForRecords = async (recordIds, authorization) => {
             return {};
         }
 
-        // 모든 tag_id를 수집
         const tagIds = [...new Set(recordTag.map(rt => rt.tag_id))];
         
         if (tagIds.length === 0) return {};
 
-        // tags 테이블에서 실제 태그 정보를 가져옴
         const { data: tags, error: tagsError } = await supabase
             .from("tags")
-            .select("id, name, color")
+            .select("id, tag")
             .in("id", tagIds)
             .setHeader('Authorization', authorization);
 
@@ -47,13 +117,11 @@ const getTagsForRecords = async (recordIds, authorization) => {
             return {};
         }
 
-        // tag_id를 키로 하는 태그 맵 생성
         const tagMap = {};
         tags.forEach(tag => {
             tagMap[tag.id] = tag;
         });
 
-        // record_id별로 태그들을 그룹화
         const recordTagMap = {};
         recordTag.forEach(rt => {
             if (!recordTagMap[rt.record_id]) {
@@ -72,8 +140,7 @@ const getTagsForRecords = async (recordIds, authorization) => {
 };
 
 // record 조회 (사용자별, 날짜별))
-router.get("/records", verifySupabaseJWT, async (req, res) => {
-    console.log('[라우트 호출] GET /record/records');
+router.get("/records", async (req, res) => {
     const { date, user_id, space_id } = req.query;
     if (!user_id) {
         return res.status(400).json({ error: "사용자 ID는 필수입니다." });
@@ -82,7 +149,7 @@ router.get("/records", verifySupabaseJWT, async (req, res) => {
     try {
         let query = supabaseAdmin
             .from("study_record")
-            .select("*")
+            .select(`*`)
             .setHeader("Authorization", req.headers.authorization)
 
         // 날짜 필터링
@@ -93,7 +160,6 @@ router.get("/records", verifySupabaseJWT, async (req, res) => {
                 return res.status(400).json({ error: "날짜 형식이 올바르지 않습니다. (YYYY-MM-DD)" });
             }
 
-            // 해당 날짜에 시작된 ₩들 조회
             const startOfDay = `${date}T00:00:00.000Z`;
             const endOfDay = `${date}T23:59:59.999Z`;
             
@@ -116,11 +182,10 @@ router.get("/records", verifySupabaseJWT, async (req, res) => {
         // 태그 정보 추가
         const recordIds = data.map(record => record.id);
         const tagsMap = await getTagsForRecords(recordIds, req.headers.authorization);
-        
-        // 각 레코드에 태그 정보 추가
-        const recordsWithTags = data.map(record => ({
-            ...record,
-            tags: tagsMap[record.id] || []
+
+        const recordsWithTags = data.map((record) => ({
+          ...record,
+          tags: tagsMap[record.id] || []
         }));
 
         res.status(200).json({
@@ -136,11 +201,9 @@ router.get("/records", verifySupabaseJWT, async (req, res) => {
 });
 
 // 기록 캘린더: 특정 연도/월에 해당하는 기록 전체 조회
-router.get("/records/calendar", verifySupabaseJWT, async (req, res) => {
-    console.log('[라우트 호출] GET /record/records/calendar');
+router.get("/records/calendar", async (req, res) => {
     const { year, month } = req.query;
 
-    // year, month 필수
     if (!year || !month) {
         return res.status(400).json({ error: "연도와 월를 모두 입력해야 합니다." });
     }
@@ -179,7 +242,6 @@ router.get("/records/calendar", verifySupabaseJWT, async (req, res) => {
 
     for (const record of records) {
         const day = new Date(record.start_time).getUTCDate();
-        // 🔴 태그 정보를 포함한 레코드 추가
         recordsByDay[day].push({
             ...record,
             tags: tagsMap[record.id] || []
@@ -200,86 +262,198 @@ router.get("/records/calendar", verifySupabaseJWT, async (req, res) => {
 });
 
 // 단일 record 조회
-router.get("/records/:id", verifySupabaseJWT, async (req, res) => {
-    console.log('[라우트 호출] GET /record/records:id');
-    const { id } = req.params;
+router.get("/records/:id", async (req, res) => {
+  const { id } = req.params;
 
-    try {
-        const { data, error } = await supabase
-            .from('study_record')
-            .select(`
-                id, title, duration, start_time, end_time,
-                goals,
-                space_id,
-                spaces (id, name, type_tags, mood_tags),
-                record_tag (tag_id),
-                record_emotions (
-                  emotion_id,
-                  emotions (
-                    name
-                  )
-                ),
-                record_photos (path)
-            `)
-            .eq("id", id)
-            .maybeSingle()
-            .setHeader('Authorization', req.headers.authorization);
+  try {
+    const { data, error } = await supabase
+      .from('study_record')
+      .select(`
+        id, title, duration, start_time, end_time, goals, space_id,
+        record_photos:record_photos ( path ),
 
-        if (error) {
-            return res.status(400).json({ error: error.message });
-        }
+        spaces:spaces (
+          id, name, type_tags, mood_tags
+        ),
 
-        // data가 빈 배열인지 확인
-        if (!data || data.length === 0) {
-            return res.status(404).json({ error: "레코드를 찾을 수 없습니다." });
-        }
+        record_emotions:record_emotions (
+          emotions:emotions ( id, name )
+        )
+      `)
+      .eq("id", id)
+      .maybeSingle()
+      .setHeader('Authorization', req.headers.authorization);
 
-        // 해당 레코드의 태그 정보 추가
-        const tagsMap = await getTagsForRecords([id], req.headers.authorization);
-        // 장소 이름이 없으면서 id가 uuidv4 형식이 아닌 경우 (구글 플레이스 ID인 경우) 구글 플레이스 API 호출
-        if (data.spaces.name === null && !isValidUuidV4(data.spaces.id)) {
-            try {
-                    const googleApiHeaders = {
-                        "Content-Type": "application/json",
-                        "X-Goog-Api-Key": process.env.GOOGLE_API_KEY,
-                        "X-Goog-FieldMask": "displayName",
-                    };
-                    const place_data = await fetch(
-                      `https://places.googleapis.com/v1/places/${data.spaces.id}?languageCode=ko&regionCode=kr`, 
-                      {
-                        method: 'GET',
-                        headers: googleApiHeaders
-                      }
-                    );
-                    if (!place_data.ok) {
-                      throw new Error(`Google Places API error: ${place_data.status}`);
-                    }
-                    const place_json = await place_data.json();
-                    data.spaces.name = place_json.displayName.text;
-                  } catch (apiErr) {
-                    console.error('Google Places API 호출 실패:', apiErr);
-                  }
-        }
-        const recordWithTags = {
-            ...data,
-            tags: tagsMap[id] || []
-        };
-
-        return res.status(200).json({ 
-            message: "레코드 조회에 성공했습니다.",
-            record: recordWithTags
-        });
-    } catch (err) {
-        console.error(err);
-        return res.status(500).json({ error: "서버 오류" });
+    if (error) {
+      return res.status(400).json({ error: error.message });
     }
+    if (!data) {
+      return res.status(404).json({ error: "레코드를 찾을 수 없습니다." });
+    }
+
+    const start = data.start_time ? new Date(data.start_time) : null;
+    const end = data.end_time ? new Date(data.end_time) : null;
+    const totalSec = (start && end) ? Math.max(0, Math.floor((end - start) / 1000)) : 0;
+
+    const dateStr = data.start_time ? data.start_time.slice(0, 10) : null;
+
+    const goals = normalizeGoals(data.goals);
+
+    const emotionsArr = Array.isArray(data.record_emotions) ? data.record_emotions : [];
+    const emotions = emotionsArr
+      .map(e => e?.emotions?.name)
+      .filter(v => typeof v === 'string' && v.trim().length > 0);
+
+    if (emotions.length === 0) {
+      try {
+        const { data: reRows, error: reErr } = await supabaseAdmin
+          .from('record_emotions')
+          .select('emotion_id')
+          .eq('record_id', id);
+
+        if (!reErr && Array.isArray(reRows) && reRows.length > 0) {
+          const emotionIds = reRows.map(r => r.emotion_id).filter(Boolean);
+          if (emotionIds.length > 0) {
+            const { data: emRows, error: emErr } = await supabaseAdmin
+              .from('emotions')
+              .select('id, name')
+              .in('id', emotionIds);
+
+            if (!emErr && Array.isArray(emRows)) {
+              const byId = {};
+              emRows.forEach(row => { byId[row.id] = row.name; });
+              const dedupNames = [...new Set(emotionIds.map(eid => byId[eid]).filter(v => typeof v === 'string' && v.trim().length > 0))];
+              if (dedupNames.length > 0) {
+                emotions.splice(0, emotions.length, ...dedupNames);
+              }
+            }
+          }
+        }
+      } catch (fallbackErr) {
+        console.error('emotions fallback 실패:', fallbackErr);
+      }
+    }
+
+    let feedbackFields = { wifi_score: null, power: null, noise_level: null, crowdness: null };
+    try {
+      const spaceIdForFeedback = data.spaces?.id ?? data.space_id ?? null;
+      if (spaceIdForFeedback) {
+        const { data: fb, error: fbErr } = await supabase
+          .from('feedback')
+          .select('wifi_score, power, noise_level, crowdness')
+          .eq('space_id', spaceIdForFeedback)
+          .order('created_at', { ascending: false })
+          .limit(1)
+          .maybeSingle()
+          .setHeader('Authorization', req.headers.authorization);
+        if (!fbErr && fb) {
+          feedbackFields = {
+            wifi_score: typeof fb.wifi_score === 'number' ? fb.wifi_score : (fb.wifi_score ?? null),
+            power: typeof fb.power === 'boolean' ? fb.power : (fb.power ?? null),
+            noise_level: typeof fb.noise_level === 'number' ? fb.noise_level : (fb.noise_level ?? null),
+            crowdness: typeof fb.crowdness === 'number' ? fb.crowdness : (fb.crowdness ?? null),
+          };
+        }
+      }
+    } catch (e) {
+      console.error('feedback 조회 실패:', e);
+    }
+
+    let imageUrl = null;
+    try {
+      let paths = Array.isArray(data.record_photos) ? data.record_photos.map(p => p?.path).filter(Boolean) : [];
+
+      if (paths.length === 0) {
+        const { data: photoRows, error: photoErr } = await supabaseAdmin
+          .from('record_photos')
+          .select('path')
+          .eq('record_id', id)
+          .order('created_at', { ascending: false })
+          .limit(5);
+        if (!photoErr && Array.isArray(photoRows)) {
+          paths = photoRows.map(r => r.path).filter(Boolean);
+        }
+      }
+
+      for (const p of paths) {
+        imageUrl = await signStudyPhotoKeyMaybe(p, Number(process.env.STUDY_PHOTO_URL_TTL_SECONDS || 86400));
+        if (imageUrl) break;
+      }
+    } catch (e) {
+      console.error('이미지 URL 생성 실패:', e);
+    }
+
+    if (data.spaces?.name === null && !isValidUuidV4(data.spaces?.id)) {
+      try {
+        const googleApiHeaders = {
+          "Content-Type": "application/json",
+          "X-Goog-Api-Key": process.env.GOOGLE_API_KEY,
+          "X-Goog-FieldMask": "displayName",
+        };
+        const placeRes = await fetch(
+          `https://places.googleapis.com/v1/places/${data.spaces.id}?languageCode=ko&regionCode=kr`,
+          { method: 'GET', headers: googleApiHeaders }
+        );
+        if (placeRes.ok) {
+          const placeJson = await placeRes.json();
+          data.spaces.name = placeJson?.displayName?.text ?? data.spaces.id;
+        }
+      } catch (apiErr) {
+        console.error('Google Places API 호출 실패:', apiErr);
+      }
+    }
+
+    const typeTagsRaw = data.spaces?.type_tags ?? null;
+    const moodTagsRaw = data.spaces?.mood_tags ?? null;
+    const parseList = (raw) => {
+      if (!raw) return [];
+      try {
+        if (Array.isArray(raw)) return raw;
+        if (typeof raw === 'string' && raw.trim().startsWith('[')) {
+          const arr = JSON.parse(raw);
+          return Array.isArray(arr) ? arr : [];
+        }
+      } catch (err) {
+        console.error('parseList JSON parse failed:', err);
+      }
+      return String(raw).split(/[,\n;/]/).map(s => s.trim()).filter(Boolean);
+    };
+    const typeList = parseList(typeTagsRaw);
+    const moodList = parseList(moodTagsRaw);
+    const primaryType = typeList[0] ?? null;
+    const primaryMood = moodList[0] ?? null;
+
+    const recordCard = {
+      id: data.id,
+      date: dateStr,
+      total_time: toHHMMSS(totalSec),
+      title: data.title ?? null,
+      image_url: imageUrl,
+      goals,
+      emotions,
+      space: {
+        id: data.spaces?.id ?? data.space_id ?? null,
+        name: data.spaces?.name ?? null,
+        type: primaryType,
+        mood: primaryMood,
+        tags: feedbackFields
+      }
+    };
+
+    return res.status(200).json({
+      message: "레코드 조회에 성공했습니다.",
+      record: recordCard
+    });
+  } catch (err) {
+    console.error(err);
+    return res.status(500).json({ error: "서버 오류" });
+  }
 });
 
 // record 수정
-router.put("/records/:id", verifySupabaseJWT, async (req, res) => {
-    console.log('[라우트 호출] PUT /record/records:id');
+router.put("/records/:id", async (req, res) => {
     const { id } = req.params;
-    const { space_id, duration, start_time, end_time, is_public, tags } = req.body; // 🔴 tags 추가
+    const { space_id, duration, start_time, end_time, is_public, tags } = req.body; 
 
     try {
         // 먼저 레코드가 존재하는지 확인
@@ -301,9 +475,7 @@ router.put("/records/:id", verifySupabaseJWT, async (req, res) => {
         if (duration != null) updateData.duration = duration;
         if (is_public != null) updateData.is_public = is_public;
 
-        // 태그 처리 로직 추가
         if (tags !== undefined) {
-            // 기존 태그 관계 삭제
             const { error: deleteTagsError } = await supabaseAdmin
                 .from("record_tags")
                 .delete()
@@ -313,7 +485,6 @@ router.put("/records/:id", verifySupabaseJWT, async (req, res) => {
                 return res.status(500).json({ error: "기존 태그 삭제 실패", details: deleteTagsError.message });
             }
 
-            // 새 태그 관계 추가 (tags가 배열이고 비어있지 않은 경우)
             if (Array.isArray(tags) && tags.length > 0) {
                 const tagRelations = tags.map(tagId => ({
                     record_id: id,
@@ -361,8 +532,7 @@ router.put("/records/:id", verifySupabaseJWT, async (req, res) => {
 });
         
 // record 삭제
-router.delete("/records/:id", verifySupabaseJWT, async (req, res) => {
-    console.log('[라우트 호출] DELETE /record/records:id');
+router.delete("/records/:id", async (req, res) => {
     const { id } = req.params;
 
     try {
@@ -385,7 +555,6 @@ router.delete("/records/:id", verifySupabaseJWT, async (req, res) => {
 
         if (deleteTagsError) {
             console.error("태그 관계 삭제 오류:", deleteTagsError);
-            // 태그 삭제 실패해도 레코드 삭제는 계속 진행
         }
         
         // 레코드 삭제
