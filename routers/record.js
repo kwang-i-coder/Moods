@@ -201,6 +201,229 @@ router.get("/records", async (req, res) => {
     }
 });
 
+async function buildRecordCardFromRow(row, authorization) {
+  // 날짜/시간
+  const start = row.start_time ? new Date(row.start_time) : null;
+  const end = row.end_time ? new Date(row.end_time) : null;
+  const totalSec = (start && end) ? Math.max(0, Math.floor((end - start) / 1000)) : 0;
+  const netSec = Number.isFinite(Number(row.duration)) ? Math.floor(Number(row.duration)) : 0;
+  const netTime = toHHMMSS(netSec);
+  const dateStr = row.start_time ? row.start_time.slice(0, 10) : null;
+
+  // 목표 정규화
+  const goals = normalizeGoals(row.goals);
+
+  // 감정 태그
+  const emotionsArr = Array.isArray(row.record_emotions) ? row.record_emotions : [];
+  const emotions = emotionsArr
+    .map(e => e?.emotions?.name)
+    .filter(v => typeof v === 'string' && v.trim().length > 0);
+
+  if (emotions.length === 0) {
+    try {
+      const { data: reRows, error: reErr } = await supabaseAdmin
+        .from('record_emotions')
+        .select('emotion_id')
+        .eq('record_id', row.id);
+
+      if (!reErr && Array.isArray(reRows) && reRows.length > 0) {
+        const emotionIds = reRows.map(r => r.emotion_id).filter(Boolean);
+        if (emotionIds.length > 0) {
+          const { data: emRows, error: emErr } = await supabaseAdmin
+            .from('emotions')
+            .select('id, name')
+            .in('id', emotionIds);
+
+          if (!emErr && Array.isArray(emRows)) {
+            const byId = {};
+            emRows.forEach(r => { byId[r.id] = r.name; });
+            const dedupNames = [...new Set(emotionIds.map(eid => byId[eid]).filter(v => typeof v === 'string' && v.trim().length > 0))];
+            if (dedupNames.length > 0) {
+              emotions.splice(0, emotions.length, ...dedupNames);
+            }
+          }
+        }
+      }
+    } catch (fallbackErr) {
+      console.error('emotions fallback 실패:', fallbackErr);
+    }
+  }
+
+  // 피드백(공간 태그)
+  let feedbackFields = { wifi_score: null, power: null, noise_level: null, crowdness: null };
+  try {
+    const spaceIdForFeedback = row.spaces?.id ?? row.space_id ?? null;
+    if (spaceIdForFeedback) {
+      const { data: fb, error: fbErr } = await supabase
+        .from('feedback')
+        .select('wifi_score, power, noise_level, crowdness')
+        .eq('space_id', spaceIdForFeedback)
+        .order('created_at', { ascending: false })
+        .limit(1)
+        .maybeSingle()
+        .setHeader('Authorization', authorization);
+      if (!fbErr && fb) {
+        feedbackFields = {
+          wifi_score: typeof fb.wifi_score === 'number' ? fb.wifi_score : (fb.wifi_score ?? null),
+          power: typeof fb.power === 'boolean' ? fb.power : (fb.power ?? null),
+          noise_level: typeof fb.noise_level === 'number' ? fb.noise_level : (fb.noise_level ?? null),
+          crowdness: typeof fb.crowdness === 'number' ? fb.crowdness : (fb.crowdness ?? null),
+        };
+      }
+    }
+  } catch (e) {
+    console.error('feedback 조회 실패:', e);
+  }
+
+  // Google Place types → 한글 매핑
+  function mapGoogleTypeToKorean(type) {
+    const mapping = {
+      'cafe': '카페',
+      'library': '도서관',
+      'restaurant': '식당',
+      'university': '대학교',
+      'school': '학교',
+      'book_store': '서점',
+      'coworking_space': '코워킹스페이스',
+      'coffee_shop': '카페',
+      'study_area': '스터디룸',
+      'internet_cafe': 'PC방',
+      'bar': '술집',
+      'bakery': '베이커리',
+      'fast_food_restaurant': '패스트푸드',
+      'convenience_store': '편의점',
+      'park': '공원',
+      'museum': '박물관',
+      'church': '교회',
+      'amusement_park': '놀이공원',
+      'movie_theater': '영화관',
+      'train_station': '기차역',
+      'bus_station': '버스터미널',
+      'shopping_mall': '쇼핑몰',
+    };
+    if (!type) return null;
+    const lower = type.toLowerCase();
+    if (mapping[lower]) return mapping[lower];
+    if (lower.endsWith('_cafe')) return '카페';
+    if (lower.endsWith('_library')) return '도서관';
+    return null;
+  }
+
+  // 장소 이름/타입
+  let placeTypes = [];
+  let placeDisplayName = row.spaces?.name ?? null;
+  if (row.spaces?.name === null && !isValidUuidV4(row.spaces?.id)) {
+    try {
+      const googleApiHeaders = {
+        "Content-Type": "application/json",
+        "X-Goog-Api-Key": process.env.GOOGLE_API_KEY,
+        "X-Goog-FieldMask": "displayName,types",
+      };
+      const placeRes = await fetch(
+        `https://places.googleapis.com/v1/places/${row.spaces.id}?languageCode=ko&regionCode=kr`,
+        { method: 'GET', headers: googleApiHeaders }
+      );
+      if (placeRes.ok) {
+        const placeJson = await placeRes.json();
+        placeDisplayName = placeJson?.displayName?.text ?? row.spaces.id;
+        placeTypes = Array.isArray(placeJson?.types) ? placeJson.types : [];
+      }
+    } catch (apiErr) {
+      console.error('Google Places API 호출 실패:', apiErr);
+    }
+  }
+  let primaryType = null;
+  for (const t of (placeTypes || [])) {
+    const mapped = mapGoogleTypeToKorean(t);
+    if (mapped) { primaryType = mapped; break; }
+  }
+
+  // 무드 태그
+  const recMoods = Array.isArray(row.record_moods) ? row.record_moods : [];
+  const moodList = [
+    ...new Set(
+      recMoods
+        .map((m) =>
+          (m && m.mood_tags && typeof m.mood_tags.mood_id === 'string'
+            ? m.mood_tags.mood_id.replace(/\r?\n/g, '').trim()
+            : '')
+        )
+        .filter(Boolean)
+    ),
+  ];
+  const primaryMood = moodList[0] ?? null;
+
+  // 이미지
+  let imageUrl = null;
+  try {
+    let paths = Array.isArray(row.record_photos) ? row.record_photos.map(p => p?.path).filter(Boolean) : [];
+
+    if (paths.length === 0) {
+      const { data: photoRows, error: photoErr } = await supabaseAdmin
+        .from('record_photos')
+        .select('path')
+        .eq('record_id', row.id)
+        .order('created_at', { ascending: false })
+        .limit(5);
+      if (!photoErr && Array.isArray(photoRows)) {
+        paths = photoRows.map(r => r.path).filter(Boolean);
+      }
+    }
+
+    for (const p of paths) {
+      imageUrl = await signStudyPhotoKeyMaybe(p, Number(process.env.STUDY_PHOTO_URL_TTL_SECONDS || 86400));
+      if (imageUrl) break;
+    }
+
+    if (!imageUrl) {
+      const { url: moodUrl } = await photoTools.getMoodWallpaper(moodList || []);
+      if (moodUrl) {
+        imageUrl = moodUrl;
+      }
+    }
+  } catch (e) {
+    console.error('이미지 URL 생성 실패:', e);
+  }
+
+  if (row.spaces?.name === null && !isValidUuidV4(row.spaces?.id)) {
+    try {
+      const googleApiHeaders = {
+        "Content-Type": "application/json",
+        "X-Goog-Api-Key": process.env.GOOGLE_API_KEY,
+        "X-Goog-FieldMask": "displayName",
+      };
+      const placeRes = await fetch(
+        `https://places.googleapis.com/v1/places/${row.spaces.id}?languageCode=ko&regionCode=kr`,
+        { method: 'GET', headers: googleApiHeaders }
+      );
+      if (placeRes.ok) {
+        const placeJson = await placeRes.json();
+        row.spaces.name = placeJson?.displayName?.text ?? row.spaces.id;
+      }
+    } catch (apiErr) {
+      console.error('Google Places API 호출 실패:', apiErr);
+    }
+  }
+
+  return {
+    id: row.id,
+    date: dateStr,
+    total_time: toHHMMSS(totalSec),
+    net_time: netTime,
+    title: row.title ?? null,
+    image_url: imageUrl,
+    goals,
+    emotions,
+    space: {
+      id: row.spaces?.id ?? row.space_id ?? null,
+      name: placeDisplayName ?? row.spaces?.name ?? null,
+      type: primaryType,
+      mood: primaryMood,
+      tags: feedbackFields
+    }
+  };
+}
+
 // 기록 캘린더: 특정 연도/월에 해당하는 기록 전체 조회
 router.get("/records/calendar", async (req, res) => {
     const { year, month } = req.query;
@@ -222,39 +445,39 @@ router.get("/records/calendar", async (req, res) => {
 
         const { data: records, error } = await supabase
             .from("study_record")
-            .select("*")
+            .select(`
+              id, title, duration, start_time, end_time, goals, space_id,
+              record_photos:record_photos ( path ),
+              spaces:spaces ( id, name ),
+              record_emotions:record_emotions ( emotions:emotions ( id, name ) ),
+              record_moods:study_record_mood_tags ( mood_tags:mood_tags ( mood_id ) )
+            `)
             .gte("start_time", startDate.toISOString())
             .lte("end_time", endDate.toISOString())
             .order("start_time", { ascending : true })
             .setHeader('Authorization', req.headers.authorization);
-    if (error) {
-        return res.status(500).json({ error: "기록 캘린더 조회 실패", details: error.message});
-    }
 
-    // 태그 정보 추가
-    const recordIds = records.map(record => record.id);
-    const tagsMap = await getTagsForRecords(recordIds, req.headers.authorization);
+        if (error) {
+            return res.status(500).json({ error: "기록 캘린더 조회 실패", details: error.message});
+        }
 
-    // 날짜별 그룹화
-    const recordsByDay = {};
-    for (let i = 1; i <= 31; i++) {
-        recordsByDay[i] = [];
-    }
+        const recordsByDay = {};
+        for (let i = 1; i <= 31; i++) {
+            recordsByDay[i] = [];
+        }
 
-    for (const record of records) {
-        const day = new Date(record.start_time).getUTCDate();
-        recordsByDay[day].push({
-            ...record,
-            tags: tagsMap[record.id] || []
+        for (const record of (records || [])) {
+            const day = new Date(record.start_time).getUTCDate();
+            const card = await buildRecordCardFromRow(record, req.headers.authorization);
+            recordsByDay[day].push(card);
+        }
+
+        res.status(200).json({
+            message: "기록 캘린더 데이터를 성공적으로 불러왔습니다.",
+            year: parsedYear,
+            month: parsedMonth,
+            records_by_day: recordsByDay
         });
-    }
-
-    res.status(200).json({
-        message: "기록 캘린더 데이터를 성공적으로 불러왔습니다.",
-        year: parsedYear,
-        month: parsedMonth,
-        records_by_day: recordsByDay
-    });
 
     } catch (error) {
         console.error("기록 캘린더 조회 중 오류 발생:", error);
