@@ -143,7 +143,7 @@ router.post('/records/:recordId', verifySupabaseJWT, upload.single('file'), asyn
         const { data: row, error: insertError } = await supabase
             .from('record_photos')
             .insert({
-                record_id: recordId, // parseInt 제거
+                record_id: recordId,
                 path,
                 width: meta.width || null,
                 height: meta.height || null,
@@ -153,6 +153,10 @@ router.post('/records/:recordId', verifySupabaseJWT, upload.single('file'), asyn
             .select()
             .single()
             .setHeader('Authorization', req.headers.authorization);
+
+            if (updateError) {
+                console.error('업데이트 실패', updateError);
+            }
             
         if (insertError) {
             // Storage 롤백
