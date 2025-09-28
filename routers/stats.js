@@ -3,9 +3,61 @@ import supabase from '../lib/supabaseClient.js';
 import verifySupabaseJWT from '../lib/verifyJWT.js';
 import { validate } from 'uuid';
 import photoTools from '../lib/photoTools.js';
+import supabaseAdmin from '../lib/supabaseAdmin.js';
 
 
 const router = express.Router();
+
+async function signStudyPhotoKeyMaybe(key, ttlSeconds = Number(process.env.STUDY_PHOTO_URL_TTL_SECONDS || 86400)) {
+  if (!key || typeof key !== 'string') return null;
+
+  const variants = [];
+  const trimmed = key.trim();
+
+  variants.push(trimmed);
+
+  if (trimmed.startsWith('study-photos/')) {
+    variants.push(trimmed.replace(/^study-photos\//, ''));
+  }
+
+  if (trimmed.startsWith('/')) {
+    variants.push(trimmed.replace(/^\//, ''));
+  }
+
+  const uniq = [...new Set(variants)].filter(v => v.length > 0);
+
+  const expanded = [];
+  for (const k of uniq) {
+    const last = k.split('/').pop() || '';
+    if (!last.includes('.')) {
+      expanded.push(k + '.jpg');
+      expanded.push(k + '.png');
+      expanded.push(k + '.webp');
+    }
+  }
+  const allCandidates = [...new Set([...uniq, ...expanded])];
+
+  for (const candidate of allCandidates) {
+    const { data: signedData, error: signedError } = await supabaseAdmin
+      .storage
+      .from('study-photos')
+      .createSignedUrl(candidate, ttlSeconds);
+    if (!signedError && signedData?.signedUrl) {
+      return signedData.signedUrl;
+    }
+  }
+
+  for (const candidate of allCandidates) {
+    const { data: signedData2, error: signedError2 } = await supabase
+      .storage
+      .from('study-photos')
+      .createSignedUrl(candidate, ttlSeconds);
+    if (!signedError2 && signedData2?.signedUrl) {
+      return signedData2.signedUrl;
+    }
+  }
+  return null;
+}
 
 // 공통: 분→"X시간 Y분" 포맷터
 const toHMText = (minutes) => {
@@ -346,7 +398,7 @@ router.get('/my/recent-spaces', verifySupabaseJWT, async (req, res) => {
     
     const { data: studyRecords, error: studyError } = await supabase
       .from('study_record')
-      .select('id, space_id, start_time, duration, study_record_mood_tags ( mood_tags ( mood_id ) )')
+      .select('id, space_id, start_time, duration, record_photos ( path ), study_record_mood_tags ( mood_tags ( mood_id ) )')
       .eq('user_id', userId)
       .order('start_time', { ascending: false })
       .setHeader('Authorization', req.headers.authorization);
@@ -420,28 +472,39 @@ router.get('/my/recent-spaces', verifySupabaseJWT, async (req, res) => {
     });
     console.log('공간 이름 매핑:', spaceNamesMap);
 
-    const wallpaperResults = await Promise.all(
+    const imageUrlMap = {};
+    await Promise.all(
       (studyRecords || []).map(async (rec) => {
-        const moods = Array.isArray(rec?.study_record_mood_tags)
-          ? rec.study_record_mood_tags
-              .map(m => m?.mood_tags?.mood_id.trim())
-              .filter(Boolean)
+        let signed = null;
+
+        // 업로드 사진 우선
+        const photoPaths = Array.isArray(rec?.record_photos)
+          ? rec.record_photos.map(p => p?.path).filter(Boolean)
           : [];
-        console.log('공간 ID:', rec.space_id, '연관된 무드 IDs:', moods);
-        const { url } = await photoTools.getMoodWallpaper(moods || []);
-        return { recordId: rec.id, url: url || null };
+        for (const p of photoPaths) {
+          signed = await signStudyPhotoKeyMaybe(p);
+          if (signed) break;
+        }
+
+        if (!signed) {
+          const moods = Array.isArray(rec?.study_record_mood_tags)
+            ? rec.study_record_mood_tags
+                .map(m => (m?.mood_tags?.mood_id || '').trim())
+                .filter(Boolean)
+            : [];
+          const { url } = await photoTools.getMoodWallpaper(moods || []);
+          signed = url || null;
+        }
+
+        imageUrlMap[rec.id] = signed;
       })
     );
-    const wallpaperMap = {};
-    wallpaperResults.forEach(({ recordId, url }) => {
-      wallpaperMap[recordId] = url;
-    });
 
     const items = [];
     for (const record of studyRecords) {
       const kstDate = new Date(new Date(record.start_time).getTime() + 9 * 60 * 60 * 1000);
       const spaceInfo = spaceInfoMap.get(record.space_id);
-      const wallpaperUrl = wallpaperMap[record.id] || null;
+      const wallpaperUrl = imageUrlMap[record.id] || null;
 
       items.push({
         space_id: record.space_id,
