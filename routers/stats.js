@@ -340,14 +340,13 @@ router.get('/my/recent-spaces', verifySupabaseJWT, async (req, res) => {
   console.log('[라우터 호출] GET /stats/my/recent-spaces');
   try {
     const userId = req.user.sub;
-    const limit = parseInt(req.query.limit) || 4; // 기본 4개
 
     // 먼저 study_record만 조회해서 디버깅
     console.log('사용자 ID:', userId);
     
     const { data: studyRecords, error: studyError } = await supabase
       .from('study_record')
-      .select('space_id, start_time, duration')
+      .select('id, space_id, start_time, duration, study_record_mood_tags ( mood_tags ( mood_id ) )')
       .eq('user_id', userId)
       .order('start_time', { ascending: false })
       .setHeader('Authorization', req.headers.authorization);
@@ -370,7 +369,7 @@ router.get('/my/recent-spaces', verifySupabaseJWT, async (req, res) => {
     }
 
     // 중복 제거된 space_id 추출
-    const uniqueSpaceIds = [...new Set(studyRecords.map(r => r.space_id))].slice(0, limit);
+    const uniqueSpaceIds = [...new Set(studyRecords.map(r => r.space_id))];
     console.log('고유 공간 IDs:', uniqueSpaceIds);
 
     const { data: spacesData, error: spacesError } = await supabase
@@ -391,10 +390,7 @@ router.get('/my/recent-spaces', verifySupabaseJWT, async (req, res) => {
       spaceInfoMap.set(space.id, space);
     });
 
-    const uniqueSpaces = [];
-    const seenSpaceIds = new Set();
-
-    // 공간 이름 및 이미지 url 비동기 호출
+    // 공간 이름 비동기 호출
     const googleApiHeaders = {
         "Content-Type": "application/json",
         "X-Goog-Api-Key": process.env.GOOGLE_API_KEY,
@@ -402,7 +398,6 @@ router.get('/my/recent-spaces', verifySupabaseJWT, async (req, res) => {
     };
 
     const spaceIdsToFetch = Array.from(uniqueSpaceIds).filter(id => !validate(id));
-    const spacePhotosPromise = photoTools.getPhotoUrls(...spaceIdsToFetch);
     const spaceNamePromises = spaceIdsToFetch.map(spaceId => {
       return fetch(
         `https://places.googleapis.com/v1/places/${spaceId}?languageCode=ko&regionCode=kr`, 
@@ -416,7 +411,6 @@ router.get('/my/recent-spaces', verifySupabaseJWT, async (req, res) => {
       })
     });
 
-    const spacePhotos = await spacePhotosPromise;
     const spaceNamesArray = await Promise.allSettled(spaceNamePromises);
     const spaceNamesMap = {}
     spaceNamesArray.map(item => {
@@ -425,47 +419,43 @@ router.get('/my/recent-spaces', verifySupabaseJWT, async (req, res) => {
       }
     });
     console.log('공간 이름 매핑:', spaceNamesMap);
-    console.log('공간 사진 매핑:', spacePhotos);
 
+    const wallpaperResults = await Promise.all(
+      (studyRecords || []).map(async (rec) => {
+        const moods = Array.isArray(rec?.study_record_mood_tags)
+          ? rec.study_record_mood_tags
+              .map(m => m?.mood_tags?.mood_id)
+              .filter(Boolean)
+          : [];
+        const { url } = await photoTools.getMoodWallpaper(moods || []);
+        return { recordId: rec.id, url: url || null };
+      })
+    );
+    const wallpaperMap = {};
+    wallpaperResults.forEach(({ recordId, url }) => {
+      wallpaperMap[recordId] = url;
+    });
+
+    const items = [];
     for (const record of studyRecords) {
-      if (!seenSpaceIds.has(record.space_id) && uniqueSpaces.length < limit) {
-        seenSpaceIds.add(record.space_id);
-        
-        const kstDate = new Date(new Date(record.start_time).getTime() + 9 * 60 * 60 * 1000);
-        const spaceInfo = spaceInfoMap.get(record.space_id);
+      const kstDate = new Date(new Date(record.start_time).getTime() + 9 * 60 * 60 * 1000);
+      const spaceInfo = spaceInfoMap.get(record.space_id);
+      const wallpaperUrl = wallpaperMap[record.id] || null;
 
-        try {
-            const place_data = await fetch(
-              `https://places.googleapis.com/v1/places/${record.space_id}?languageCode=ko&regionCode=kr`, 
-              {
-                method: 'GET',
-                headers: googleApiHeaders
-              }
-            );
-            if (!place_data.ok) {
-              throw new Error(`Google Places API error: ${place_data.status}`);
-            }
-            const place_json = await place_data.json();
-            spaceInfo.name = place_json.displayName.text;
-        } catch (apiErr) {
-          console.error('Google Places API 호출 에러:', apiErr);
-        }
-
-        uniqueSpaces.push({
-          space_id: record.space_id,
-          space_name: spaceNamesMap[record.space_id] || spaceInfo?.name || '이름 없음',
-          space_image_url: spacePhotos[record.space_id] || [],
-          last_visit_date: kstDate.toISOString().split('T')[0], // YYYY-MM-DD 형식
-          last_visit_time: record.start_time,
-          duration: Number(record.duration || 0)
-        });
-      }
+      items.push({
+        space_id: record.space_id,
+        space_name: spaceNamesMap[record.space_id] || spaceInfo?.name || '이름 없음',
+        space_image_url: wallpaperUrl || null,
+        last_visit_date: kstDate.toISOString().split('T')[0],
+        last_visit_time: record.start_time,
+        duration: Number(record.duration || 0)
+      });
     }
 
     return res.json({
       success: true,
-      items: uniqueSpaces,
-      total_count: uniqueSpaces.length
+      items,
+      total_count: items.length
     });
 
   } catch (err) {
