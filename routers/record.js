@@ -351,7 +351,6 @@ async function buildRecordCardFromRow(row, authorization) {
         .filter(Boolean)
     ),
   ];
-  const primaryMood = moodList[0] ?? null;
 
   // 이미지
   let imageUrl = null;
@@ -418,7 +417,7 @@ async function buildRecordCardFromRow(row, authorization) {
       id: row.spaces?.id ?? row.space_id ?? null,
       name: placeDisplayName ?? row.spaces?.name ?? null,
       type: primaryType,
-      mood: primaryMood,
+      mood: moodList,
       tags: feedbackFields
     }
   };
@@ -671,8 +670,6 @@ router.get("/records/:id", async (req, res) => {
       ),
     ];
 
-    const primaryMood = moodList[0] ?? null;
-
     let imageUrl = null;
     try {
       let paths = Array.isArray(data.record_photos) ? data.record_photos.map(p => p?.path).filter(Boolean) : [];
@@ -740,7 +737,7 @@ router.get("/records/:id", async (req, res) => {
         id: data.spaces?.id ?? data.space_id ?? null,
         name: placeDisplayName ?? data.spaces?.name ?? null,
         type: primaryType,
-        mood: primaryMood,
+        mood: moodList,
         tags: feedbackFields
       }
     };
