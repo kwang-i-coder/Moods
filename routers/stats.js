@@ -392,6 +392,7 @@ router.get('/my/recent-spaces', verifySupabaseJWT, async (req, res) => {
   console.log('[라우터 호출] GET /stats/my/recent-spaces');
   try {
     const userId = req.user.sub;
+    const limit = 10; // 항상 10개 고정
 
     // 먼저 study_record만 조회해서 디버깅
     console.log('사용자 ID:', userId);
@@ -401,6 +402,7 @@ router.get('/my/recent-spaces', verifySupabaseJWT, async (req, res) => {
       .select('id, space_id, start_time, duration, record_photos ( path ), study_record_mood_tags ( mood_tags ( mood_id ) )')
       .eq('user_id', userId)
       .order('start_time', { ascending: false })
+      .limit(limit)
       .setHeader('Authorization', req.headers.authorization);
 
     if (studyError) {
