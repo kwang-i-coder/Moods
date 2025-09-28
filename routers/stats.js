@@ -290,7 +290,7 @@ router.get("/my/spaces-ranks", verifySupabaseJWT, async (req, res) => {
 
                 myRanks.push({
                     space_name: spaceNamesMap[spaceId] || spaceInfo?.name,
-                    space_image_url: spacePhotos[spaceId] || [],
+                    space_image_url: spacePhotos[spaceId] || null,
                     my_study_count: myStats.study_count,
                     my_total_minutes: myStats.total_minutes,
                 });
@@ -424,9 +424,10 @@ router.get('/my/recent-spaces', verifySupabaseJWT, async (req, res) => {
       (studyRecords || []).map(async (rec) => {
         const moods = Array.isArray(rec?.study_record_mood_tags)
           ? rec.study_record_mood_tags
-              .map(m => m?.mood_tags?.mood_id)
+              .map(m => m?.mood_tags?.mood_id.trim())
               .filter(Boolean)
           : [];
+        console.log('공간 ID:', rec.space_id, '연관된 무드 IDs:', moods);
         const { url } = await photoTools.getMoodWallpaper(moods || []);
         return { recordId: rec.id, url: url || null };
       })
