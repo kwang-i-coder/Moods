@@ -539,15 +539,19 @@ router.get('/my/preferred-keywords', verifySupabaseJWT, async (req, res) => {
   try {
     const userId = req.user.sub;
 
-    // 사용자의 공부 기록 조회 (최근 3개월)
-    const threeMonthsAgo = new Date();
-    threeMonthsAgo.setMonth(threeMonthsAgo.getMonth() - 3);
-    
     const { data: studyRecords, error: studyError } = await supabase
       .from('study_record')
-      .select('space_id, duration, start_time')
+      .select(`
+        id,
+        space_id,
+        duration,
+        start_time,
+        study_record_mood_tags (
+          mood_tags ( mood_id )
+        )
+      `)
       .eq('user_id', userId)
-      .gte('start_time', threeMonthsAgo.toISOString())
+      .order('start_time', { ascending: false })
       .setHeader('Authorization', req.headers.authorization);
 
     if (studyError) throw studyError;
@@ -555,221 +559,199 @@ router.get('/my/preferred-keywords', verifySupabaseJWT, async (req, res) => {
     if (!studyRecords || studyRecords.length === 0) {
       return res.json({
         success: true,
-        preferred_keywords: {
-          wifi_preference: [],
-          power_preference: [],
-          noise_preference: [],
-          crowdness_preference: []
+        keywords: {
+          types: [],
+          moods: [],
+          features: []
         },
-        analysis_summary: '분석할 데이터가 충분하지 않습니다.'
+        message: '분석할 공부 기록이 없습니다.'
       });
     }
 
-    // 사용자가 공부한 공간들의 ID 추출
-    const spaceIds = [...new Set(studyRecords.map(r => r.space_id))];
+    const spaceStats = new Map(); 
+    let totalStudyTime = 0;
 
-    // 해당 공간들의 feedback 데이터 조회 (공간별 최신 피드백 위주)
+    studyRecords.forEach(rec => {
+      const sid = rec.space_id;
+      const dur = Number(rec.duration || 0);
+      totalStudyTime += dur;
+
+      if (!spaceStats.has(sid)) {
+        spaceStats.set(sid, { visit_count: 0, total_duration: 0 });
+      }
+      const s = spaceStats.get(sid);
+      s.visit_count += 1;
+      s.total_duration += dur;
+    });
+
+    if (totalStudyTime <= 0) totalStudyTime = 1;
+
+    const weightForSpace = (sid) => {
+      const stats = spaceStats.get(sid) || { visit_count: 0, total_duration: 0 };
+      return (stats.total_duration / totalStudyTime) * 0.7 +
+             (stats.visit_count / studyRecords.length) * 0.3;
+    };
+
+    const mapGoogleTypeToKorean = (type) => {
+      if (!type) return null;
+      const lower = String(type).toLowerCase();
+      const mapping = {
+        'cafe': '카페',
+        'coffee_shop': '카페',
+        'library': '도서관',
+        'book_store': '서점',
+        'university': '대학교',
+        'school': '학교',
+        'coworking_space': '코워킹스페이스',
+        'study_area': '스터디 카페',
+        'internet_cafe': 'PC방',
+        'restaurant': '식당',
+        'bakery': '베이커리',
+        'fast_food_restaurant': '패스트푸드',
+        'convenience_store': '편의점',
+        'park': '공원',
+        'museum': '박물관',
+        'movie_theater': '영화관',
+        'shopping_mall': '쇼핑몰'
+      };
+      if (mapping[lower]) return mapping[lower];
+      if (lower.endsWith('_cafe')) return '카페';
+      if (lower.endsWith('_library')) return '도서관';
+      return null;
+    };
+
+    const uniqueSpaceIds = [...new Set(studyRecords.map(r => r.space_id))];
+
+    const googleApiHeaders = {
+      'Content-Type': 'application/json',
+      'X-Goog-Api-Key': process.env.GOOGLE_API_KEY,
+      'X-Goog-FieldMask': 'types'
+    };
+
+    const fetchTypesForSpace = async (spaceId) => {
+      try {
+        if (validate(spaceId)) return [];
+      } catch (_) {}
+
+      const res = await fetch(`https://places.googleapis.com/v1/places/${spaceId}?languageCode=ko&regionCode=kr`, {
+        method: 'GET',
+        headers: googleApiHeaders
+      });
+      if (!res.ok) return [];
+      const json = await res.json();
+      return Array.isArray(json.types) ? json.types : [];
+    };
+
+    const typeScore = new Map(); 
+    await Promise.all(uniqueSpaceIds.map(async (sid) => {
+      const types = await fetchTypesForSpace(sid);
+      const w = weightForSpace(sid);
+      (types || []).forEach(t => {
+        const label = mapGoogleTypeToKorean(t);
+        if (label) {
+          typeScore.set(label, (typeScore.get(label) || 0) + w);
+        }
+      });
+    }));
+
+    const typesSorted = [...typeScore.entries()]
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 2) 
+      .map(([label]) => label);
+
+    const moodScore = new Map(); 
+    studyRecords.forEach(rec => {
+      const moods = Array.isArray(rec?.study_record_mood_tags)
+        ? rec.study_record_mood_tags
+            .map(m => (m?.mood_tags?.mood_id || '').trim())
+            .filter(Boolean)
+        : [];
+      if (moods.length === 0) return;
+      const w = weightForSpace(rec.space_id);
+      const each = w / moods.length;
+      moods.forEach(moodKo => {
+        moodScore.set(moodKo, (moodScore.get(moodKo) || 0) + each);
+      });
+    });
+
+    const moodsSorted = [...moodScore.entries()]
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 2) 
+      .map(([label]) => label);
+
     const { data: feedbacks, error: feedbackError } = await supabase
       .from('feedback')
-      .select(`
-        space_id,
-        wifi_score,
-        power,
-        noise_level,
-        crowdness,
-        comment,
-        created_at
-      `)
-      .in('space_id', spaceIds)
+      .select('space_id, wifi_score, power, noise_level, crowdness, created_at')
+      .in('space_id', uniqueSpaceIds)
       .order('created_at', { ascending: false })
       .setHeader('Authorization', req.headers.authorization);
 
-      const { data: spaceMeta, error: spaceMetaError } = await supabase
-        .from('spaces')
-        .select('id, type_tags, mood_tags')
-        .in('id', spaceIds)
-        .setHeader('Authorization', req.headers.authorization);;
-
     if (feedbackError) throw feedbackError;
-    if (spaceMetaError) throw spaceMetaError;
 
-    const typeCount = {};
-    const moodCount = {};
-    spaceMeta.forEach(space => {
-      (space.type_tags || []).forEach(tag => {
-        typeCount[tag] = (typeCount[tag] || 0) + 1;
-      });
-      (space.mood_tags || []).forEach(tag => {
-        moodCount[tag] = (moodCount[tag] || 0) + 1;
-      });
-    });
-
-    // 상위 선호 태그 추출
-    const sortedTags = (tagMap) =>
-      Object.entries(tagMap)
-        .sort((a, b) => b[1] - a[1])
-        .slice(0, 3)
-        .map(([tag, count]) => ({ keyword: tag, count }));
-
-    const preferred_keywords = {};
-    preferred_keywords.type_tags = sortedTags(typeCount);
-    preferred_keywords.mood_tags = sortedTags(moodCount);
-
-    // 공간별 이용 통계 계산
-    const spaceStats = new Map();
-    let totalStudyTime = 0;
-
-    studyRecords.forEach(record => {
-      const spaceId = record.space_id;
-      const duration = Number(record.duration || 0);
-      totalStudyTime += duration;
-
-      if (!spaceStats.has(spaceId)) {
-        spaceStats.set(spaceId, {
-          visit_count: 0,
-          total_duration: 0
-        });
-      }
-
-      const stats = spaceStats.get(spaceId);
-      stats.visit_count += 1;
-      stats.total_duration += duration;
-    });
-
-    const spaceFeedbacks = new Map();
-    (feedbacks || []).forEach(feedback => {
-      const spaceId = feedback.space_id;
-      if (!spaceFeedbacks.has(spaceId)) {
-        spaceFeedbacks.set(spaceId, feedback); 
+    const latestBySpace = new Map();
+    (feedbacks || []).forEach(fb => {
+      if (!latestBySpace.has(fb.space_id)) {
+        latestBySpace.set(fb.space_id, fb);
       }
     });
 
-    // 선호도 분석을 위한 점수 집계
-    const wifiScores = [];
-    const powerPreference = { true: 0, false: 1 }; 
-    const noiseScores = [];
-    const crowdnessScores = [];
-    
-    // 가중치 계산 (이용 시간과 방문 횟수 기반)
-    for (const [spaceId, stats] of spaceStats.entries()) {
-      const weight = (stats.total_duration / totalStudyTime) * 0.7 + 
-                     (stats.visit_count / studyRecords.length) * 0.3;
+    let wifiWeightedSum = 0, wifiWeight = 0;
+    let noiseWeightedSum = 0, noiseWeight = 0;
+    let crowdWeightedSum = 0, crowdWeight = 0;
+    let powerTrueWeight = 0, powerFalseWeight = 0;
 
-      const feedback = spaceFeedbacks.get(spaceId);
-      
-      if (feedback) {
-        // WiFi 점수 분석
-        if (feedback.wifi_score !== null) {
-          wifiScores.push({ score: feedback.wifi_score, weight });
-        }
+    uniqueSpaceIds.forEach(sid => {
+      const fb = latestBySpace.get(sid);
+      if (!fb) return;
+      const w = weightForSpace(sid);
 
-        // 콘센트(전원) 선호도 분석
-        if (feedback.power !== null) {
-          const key = feedback.power ? 'true' : 'false';
-          powerPreference[key] += weight;
-        }
-
-        // 소음 레벨 분석
-        if (feedback.noise_level !== null) {
-          noiseScores.push({ score: feedback.noise_level, weight });
-        }
-
-        // 혼잡도 분석
-        if (feedback.crowdness !== null) {
-          crowdnessScores.push({ score: feedback.crowdness, weight });
-        }
+      if (typeof fb.wifi_score === 'number') {
+        wifiWeightedSum += fb.wifi_score * w;
+        wifiWeight += w;
       }
+      if (typeof fb.noise_level === 'number') {
+        noiseWeightedSum += fb.noise_level * w;
+        noiseWeight += w;
+      }
+      if (typeof fb.crowdness === 'number') {
+        crowdWeightedSum += fb.crowdness * w;
+        crowdWeight += w;
+      }
+      if (typeof fb.power === 'boolean') {
+        if (fb.power) powerTrueWeight += w;
+        else powerFalseWeight += w;
+      }
+    });
+
+    const features = [];
+    if (powerTrueWeight > powerFalseWeight * 1.1) features.push('콘센트 많음');
+
+    const noiseAvg = noiseWeight ? (noiseWeightedSum / noiseWeight) : null;
+    if (noiseAvg !== null) {
+      if (noiseAvg <= 2.2) features.push('소음 낮음');
+      else if (noiseAvg >= 3.4) features.push('소음 높음');
+      else features.push('소음 보통');
     }
 
-    // 선호도 키워드 생성
-    const getWifiPreference = (scores) => {
-      if (scores.length === 0) return [];
-      const avgScore = scores.reduce((sum, item) => sum + item.score * item.weight, 0) / 
-                      scores.reduce((sum, item) => sum + item.weight, 0);
-      
-      if (avgScore >= 4) return [{ keyword: "WiFi 좋음", percentage: Math.round(avgScore * 20) }];
-      if (avgScore >= 3) return [{ keyword: "WiFi 보통", percentage: Math.round(avgScore * 20) }];
-      return [{ keyword: "WiFi 개선 필요", percentage: Math.round(avgScore * 20) }];
-    };
-
-    const getPowerPreference = (preference) => {
-      const total = preference.true + preference.false;
-      if (total === 0) return [];
-      
-      const truePercentage = Math.round((preference.true / total) * 100);
-      const falsePercentage = Math.round((preference.false / total) * 100);
-      
-      const result = [];
-      if (truePercentage > 50) result.push({ keyword: "콘센트 많음", percentage: truePercentage });
-      if (falsePercentage > 50) result.push({ keyword: "콘센트 부족", percentage: falsePercentage });
-      
-      return result;
-    };
-
-    const getNoisePreference = (scores) => {
-      if (scores.length === 0) return [];
-      const avgScore = scores.reduce((sum, item) => sum + item.score * item.weight, 0) / 
-                      scores.reduce((sum, item) => sum + item.weight, 0);
-      
-      if (avgScore >= 4) return [{ keyword: "매우 시끄러움", percentage: Math.round(avgScore * 20) }];
-      if (avgScore >= 3) return [{ keyword: "적당한 소음", percentage: Math.round(avgScore * 20) }];
-      if (avgScore >= 2) return [{ keyword: "조용함", percentage: Math.round(avgScore * 20) }];
-      return [{ keyword: "매우 조용함", percentage: Math.round(avgScore * 20) }];
-    };
-
-    const getCrowdnessPreference = (scores) => {
-      if (scores.length === 0) return [];
-      const avgScore = scores.reduce((sum, item) => sum + item.score * item.weight, 0) / 
-                      scores.reduce((sum, item) => sum + item.weight, 0);
-      
-      if (avgScore >= 4) return [{ keyword: "매우 붐빔", percentage: Math.round(avgScore * 20) }];
-      if (avgScore >= 3) return [{ keyword: "적당히 붐빔", percentage: Math.round(avgScore * 20) }];
-      if (avgScore >= 2) return [{ keyword: "한적함", percentage: Math.round(avgScore * 20) }];
-      return [{ keyword: "매우 한적함", percentage: Math.round(avgScore * 20) }];
-    };
-
-    const preferredKeywords = {
-      wifi_preference: getWifiPreference(wifiScores),
-      power_preference: getPowerPreference(powerPreference),
-      noise_preference: getNoisePreference(noiseScores),
-      crowdness_preference: getCrowdnessPreference(crowdnessScores)
-    };
-
-    // 분석 요약 생성
-    const totalSpaces = spaceStats.size;
-    const totalSessions = studyRecords.length;
-    const averageSessionDuration = Math.round(totalStudyTime / totalSessions / 60); // 분 단위
-
-    // 주요 선호도 추출
-    const topPreferences = [];
-    if (preferredKeywords.wifi_preference[0]) topPreferences.push(preferredKeywords.wifi_preference[0].keyword);
-    if (preferredKeywords.power_preference[0]) topPreferences.push(preferredKeywords.power_preference[0].keyword);
-    if (preferredKeywords.noise_preference[0]) topPreferences.push(preferredKeywords.noise_preference[0].keyword);
-    if (preferredKeywords.crowdness_preference[0]) topPreferences.push(preferredKeywords.crowdness_preference[0].keyword);
-
-    const analysisSummary = [
-      `최근 3개월간 ${totalSpaces}개 공간에서 ${totalSessions}회 공부했습니다.`,
-      `평균 공부 시간은 ${averageSessionDuration}분입니다.`,
-      topPreferences.length > 0 ? `주로 ${topPreferences.slice(0, 2).join(', ')} 환경을 선호합니다.` : ''
-    ].filter(Boolean).join(' ');
+    const crowdAvg = crowdWeight ? (crowdWeightedSum / crowdWeight) : null;
+    if (crowdAvg !== null) {
+      if (crowdAvg <= 2.4) features.push('자리 많음');
+      else if (crowdAvg >= 3.4) features.push('자리 적음');
+      else features.push('자리 보통');
+    }
 
     return res.json({
       success: true,
-      preferred_keywords: preferredKeywords,
-      analysis_summary: analysisSummary,
-      stats: {
-        analysis_period_months: 3,
-        total_spaces: totalSpaces,
-        total_sessions: totalSessions,
-        total_study_hours: Math.round(totalStudyTime / 3600),
-        average_session_minutes: averageSessionDuration,
-        analyzed_feedbacks: (feedbacks || []).length
+      keywords: {
+        types: typesSorted,   
+        moods: moodsSorted,   
+        features              
       }
     });
 
   } catch (err) {
     console.error(err);
-    return res.status(500).json({ error: '선호 키워드 분석 실패' });
+    return res.status(500).json({ error: '선호 공간 키워드 분석 실패' });
   }
 });
 
