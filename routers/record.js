@@ -445,11 +445,11 @@ router.get("/records/calendar", async (req, res) => {
         const { data: records, error } = await supabase
             .from("study_record")
             .select(`
-              id, title, duration, start_time, end_time, goals, space_id,
+              duration,
+              start_time,
+              space_id,
               record_photos:record_photos ( path ),
-              spaces:spaces ( id, name ),
-              record_emotions:record_emotions ( emotions:emotions ( id, name ) ),
-              record_moods:study_record_mood_tags ( mood_tags:mood_tags ( mood_id ) )
+              spaces:spaces ( id, name )
             `)
             .gte("start_time", startDate.toISOString())
             .lte("end_time", endDate.toISOString())
@@ -462,13 +462,75 @@ router.get("/records/calendar", async (req, res) => {
 
         const recordsByDay = {};
         for (let i = 1; i <= 31; i++) {
-            recordsByDay[i] = [];
+          recordsByDay[i] = { records: [] };
         }
 
         for (const record of (records || [])) {
             const day = new Date(record.start_time).getUTCDate();
-            const card = await buildRecordCardFromRow(record, req.headers.authorization);
-            recordsByDay[day].push(card);
+
+            const total_time = (typeof record.duration === 'number') ? record.duration : null;
+
+            let spaceName = (record.spaces && typeof record.spaces.name === 'string' && record.spaces.name.trim() !== '')
+              ? record.spaces.name
+              : null;
+
+            const spaceId = record.spaces?.id ?? record.space_id ?? null;
+            if (!spaceName && spaceId && !isValidUuidV4(spaceId)) {
+              try {
+                const googleApiHeaders = {
+                  "Content-Type": "application/json",
+                  "X-Goog-Api-Key": process.env.GOOGLE_API_KEY,
+                  "X-Goog-FieldMask": "displayName",
+                };
+                const placeRes = await fetch(
+                  `https://places.googleapis.com/v1/places/${spaceId}?languageCode=ko&regionCode=kr`,
+                  { method: 'GET', headers: googleApiHeaders }
+                );
+                if (placeRes.ok) {
+                  const placeJson = await placeRes.json();
+                  if (placeJson?.displayName?.text) {
+                    spaceName = placeJson.displayName.text;
+                  }
+                }
+              } catch (apiErr) {
+                console.error('Google Places API 호출 실패 (calendar):', apiErr);
+              }
+            }
+
+            let imageUrl = null;
+            try {
+                let paths = Array.isArray(record.record_photos)
+                  ? record.record_photos.map(p => p?.path).filter(Boolean)
+                  : [];
+
+                if (paths.length > 0) {
+                  for (const p of paths) {
+                    imageUrl = await signStudyPhotoKeyMaybe(p, Number(process.env.STUDY_PHOTO_URL_TTL_SECONDS || 86400));
+                    if (imageUrl) break;
+                  }
+                }
+
+                if (!imageUrl) {
+                  const { url: moodUrl } = await photoTools.getMoodWallpaper([]);
+                  if (moodUrl) imageUrl = moodUrl;
+                }
+            } catch (e) {
+                console.error('이미지 URL 생성 실패 (calendar):', e);
+            }
+
+            const card = {
+                total_time,
+                space_name: spaceName ?? null,
+                image_url: imageUrl ?? null
+            };
+            recordsByDay[day].records.push(card);
+        }
+
+        for (const d in recordsByDay) {
+          const len = recordsByDay[d].records.length;
+          if (len > 1) {
+            recordsByDay[d].count = len;
+          }
         }
 
         res.status(200).json({
