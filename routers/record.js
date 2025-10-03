@@ -445,6 +445,7 @@ router.get("/records/calendar", async (req, res) => {
         const { data: records, error } = await supabase
             .from("study_record")
             .select(`
+              id,
               duration,
               start_time,
               space_id,
@@ -519,9 +520,10 @@ router.get("/records/calendar", async (req, res) => {
             }
 
             const card = {
-                total_time,
+                id: record.id,
+                duration: total_time,
                 space_name: spaceName ?? null,
-                image_url: imageUrl ?? null
+                space_image_url: imageUrl ?? null
             };
             recordsByDay[day].records.push(card);
         }
