@@ -60,7 +60,8 @@ router.post('/start', verifySupabaseJWT, async (req, res) => {
     accumulatedPauseSeconds: '0',
     goals: JSON.stringify(goalsNorm),
     mood_id: JSON.stringify(mood_id),
-    record_id: uuidv4()
+    record_id: uuidv4(),
+    img_path: 'general/Rectangle 34627910.png'
   });
 
   return res.status(200).json({
@@ -442,7 +443,8 @@ router.post('/session-to-record', verifySupabaseJWT, async (req, res) => {
     start_time: start_time.toISOString(),
     end_time: end_time.toISOString(),
     goals,
-    feedback_id: null // placeholder to be updated later
+    feedback_id: null, // placeholder to be updated later
+    img_path: session.img_path || 'general/Rectangle 34627910.png'
   };
 
   const { error: recordErr } = await supabase
