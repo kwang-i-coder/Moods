@@ -10,7 +10,7 @@
     }
     body {
       font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-      background: linear-gradient(135deg, #fdfbfb, #ebedee);
+      background: linear-gradient(135deg, #F0E8E2, #9D897B);
       display: flex;
       justify-content: center;
       align-items: center;
@@ -20,20 +20,20 @@
     }
     .container {
       text-align: center;
-      background: white;
+      background: #FFF;
       padding: 40px;
       border-radius: 16px;
-      box-shadow: 0 10px 25px rgba(0, 0, 0, 0.1);
+      box-shadow: 0 10px 25px rgba(82, 62, 48, 0.15);
       max-width: 400px;
     }
     h1 {
       font-size: 2rem;
       margin-bottom: 1rem;
-      color: #2ecc71;
+      color: #523E30;
     }
     p {
       font-size: 1rem;
-      color: #555;
+      color: #796154;
     }
 
     canvas {
@@ -67,7 +67,8 @@
     let particles = [];
 
     function createParticle(x, y) {
-      const colors = ['#ff7675', '#74b9ff', '#ffeaa7', '#55efc4', '#a29bfe'];
+      // 팔레트에 맞춘 부드러운 불꽃 색상
+      const colors = ['#523E30', '#796154', '#9D897B', '#F0E8E2'];
       const angle = Math.random() * 2 * Math.PI;
       const speed = Math.random() * 4 + 2;
       return {
