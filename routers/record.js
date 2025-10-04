@@ -355,30 +355,20 @@ async function buildRecordCardFromRow(row, authorization) {
   // 이미지
   let imageUrl = null;
   try {
-    let paths = Array.isArray(row.record_photos) ? row.record_photos.map(p => p?.path).filter(Boolean) : [];
+    const img_path = row.img_path || 'general/Rectangle 34627910.png';
 
-    if (paths.length === 0) {
-      const { data: photoRows, error: photoErr } = await supabaseAdmin
-        .from('record_photos')
-        .select('path')
-        .eq('record_id', row.id)
-        .order('created_at', { ascending: false })
-        .limit(5);
-      if (!photoErr && Array.isArray(photoRows)) {
-        paths = photoRows.map(r => r.path).filter(Boolean);
-      }
+
+    const {data, error: signedErr} = await supabaseAdmin
+        .storage
+        .from(img_path.split('/').length > 2 ? 'study-photos' : 'wallpaper')
+        .createSignedUrl(img_path, Number(process.env.STUDY_PHOTO_URL_TTL_SECONDS || 86400));
+    if (signedErr) {
+      console.error('기본 이미지 서명 URL 생성 실패:', signedErr);
+      imageUrl = null;
     }
-
-    for (const p of paths) {
-      imageUrl = await signStudyPhotoKeyMaybe(p, Number(process.env.STUDY_PHOTO_URL_TTL_SECONDS || 86400));
-      if (imageUrl) break;
-    }
-
-    if (!imageUrl) {
-      const { url: moodUrl } = await photoTools.getMoodWallpaper(moodList || []);
-      if (moodUrl) {
-        imageUrl = moodUrl;
-      }
+    const moodUrl = data.signedUrl;
+    if (moodUrl) {
+      imageUrl = moodUrl;
     }
   } catch (e) {
     console.error('이미지 URL 생성 실패:', e);
@@ -462,8 +452,9 @@ router.get("/records/calendar", async (req, res) => {
         }
 
         const recordsByDay = {};
-        for (let i = 1; i <= 31; i++) {
-          recordsByDay[i] = { records: [] };
+        const lastDay = new Date(Date.UTC(parsedYear, parsedMonth, 0)).getUTCDate();
+        for (let i = 1; i <= lastDay; i++) {
+          recordsByDay[i] = { count: 0, records: [] };
         }
 
         for (const record of (records || [])) {
@@ -526,14 +517,10 @@ router.get("/records/calendar", async (req, res) => {
                 space_image_url: imageUrl ?? null
             };
             recordsByDay[day].records.push(card);
+            recordsByDay[day].count += 1;
         }
 
-        for (const d in recordsByDay) {
-          const len = recordsByDay[d].records.length;
-          if (len > 1) {
-            recordsByDay[d].count = len;
-          }
-        }
+
 
         res.status(200).json({
             message: "기록 캘린더 데이터를 성공적으로 불러왔습니다.",
