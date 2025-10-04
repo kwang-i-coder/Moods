@@ -4,6 +4,8 @@ services:
   redis:
     image: jungdae/moods_session:latest
     container_name: redis
+    volumes:
+      - redis_data:/data
     ports:
       - "6379:6379"
     networks:
@@ -24,3 +26,7 @@ services:
 networks:
   app_network:
     driver: bridge
+
+volumes:
+  redis_data:
+    driver: local

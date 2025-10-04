@@ -234,56 +234,36 @@ router.get('/my-summary/total', verifySupabaseJWT, async (req, res) => {
 router.get("/my/spaces-ranks", verifySupabaseJWT, async (req, res) => {
     console.log('[라우터 호출] GET /stats/my/spaces-ranks')
     try {
-        const userId = req.user.sub;
-
         // 내가 공부한 공간들 조회
+        // space_id, visit_count, last_visited, total_duration, name
         const { data: mySpaces, error: mySpacesError } = await supabase
-            .from("study_record")
-            .select("space_id")
-            .eq("user_id", userId)
+            .from('visited_spaces')
+            .select()
+            .order('last_visited', { ascending: false })
             .setHeader('Authorization', req.headers.authorization);
 
         if (mySpacesError) throw mySpacesError;
 
-        const mySpaceIds = [ ...new Set(mySpaces.map(s => s.space_id))];
+        const spaceMap = {};
+        mySpaces.forEach(s => {
+          spaceMap[s.space_id] = s;
+        });
 
-        if (mySpaceIds.length === 0) {
-            return res.json({ success: true, items: [] });
-        } 
-
-        // 내가 공부한 공간들의 모든 유저 데이터 조회
-        const { data: rows, error } = await supabase
-            .from("study_record")
-            .select("space_id, user_id, duration, spaces!inner(name, image_url)")
-            .in("space_id", mySpaceIds)
+        const { data: spaceImagesData, error: spaceImagesError } = await supabase
+            .from('study_record')
+            .select('space_id, img_path')
+            .in('space_id', mySpaces.map(space => space.space_id))
+            .order('start_time', { ascending: false })
             .setHeader('Authorization', req.headers.authorization);
 
-        if (error) throw error;
+        if (spaceImagesError) throw spaceImagesError;
 
-        // 공간별 유저 집계
-        const spaceUserStats = new Map();
-
-        for (const record of rows) {
-            const spaceId = record.space_id;
-            const userId = record.user_id;
-
-            if (!spaceUserStats.has(spaceId)) {
-                spaceUserStats.set(spaceId, new Map());
-            }
-
-            const userMap = spaceUserStats.get(spaceId);
-            if (!userMap.has(userId)) {
-                userMap.set(userId, {
-                    user_id: userId,
-                    study_count: 0,
-                    total_minutes: 0
-                });
-            }
-
-            const userStats = userMap.get(userId);
-            userStats.study_count += 1;
-            userStats.total_minutes += Number(record.duration || 0);
-        }
+        // google 사진이 없는 경우 최근 기록 사진으로 대체
+        spaceImagesData.forEach(space => {
+          if (space.img_path && !spaceMap[space.space_id]?.img_path) {
+            spaceMap[space.space_id].img_path = space.img_path;
+          }
+        });
 
         // 공간 이름 및 이미지 url 비동기 호출
         const googleApiHeaders = {
@@ -292,7 +272,9 @@ router.get("/my/spaces-ranks", verifySupabaseJWT, async (req, res) => {
             "X-Goog-FieldMask": "displayName",
         };
 
-        const spaceIdsToFetch = Array.from(spaceUserStats.keys()).filter(id => !validate(id));
+        // 사적 공간 id를 제외한 공간 id 저장
+        const spaceIdsToFetch = Array.from(Object.keys(spaceMap)).filter(id => !validate(id));
+        // 구글 등록 공간에 대한 사진 및 이름 요청
         const spacePhotosPromise = photoTools.getPhotoUrls(...spaceIdsToFetch);
         const spaceNamePromises = spaceIdsToFetch.map(spaceId => {
           return fetch(
@@ -315,48 +297,53 @@ router.get("/my/spaces-ranks", verifySupabaseJWT, async (req, res) => {
             spaceNamesMap[item.value.spaceId] = item.value.name;
           }
         });
-        console.log('공간 이름 매핑:', spaceNamesMap);
-        console.log('공간 사진 매핑:', spacePhotos);
 
-        // 공간별 랭킹 계산 후 내 순위 추출
-        const myRanks = [];
-        
-        
-        for (const [spaceId, userMap] of spaceUserStats.entries()) {
-            const userList = Array.from(userMap.values());
-
-            // 랭킹 정렬
-            userList.sort((a, b) => {
-                if (b.study_count !== a.study_count) {
-                    return b.study_count - a.study_count;
-                }
-                return b.total_minutes - a.total_minutes;
-            });
-
-            const myIndex = userList.findIndex(user => user.user_id === userId);
-
-            if (myIndex >= 0) {
-                const myStats = userList[myIndex];
-                const spaceInfo = rows.find(r => r.space_id === spaceId && r.user_id === userId)?.spaces;
-                spaceInfo.name = spaceNamesMap[spaceId] || spaceInfo?.name;
-
-                myRanks.push({
-                    space_name: spaceNamesMap[spaceId] || spaceInfo?.name,
-                    space_image_url: spacePhotos[spaceId] || null,
-                    my_study_count: myStats.study_count,
-                    my_total_minutes: myStats.total_minutes,
-                });
-            }
-        }
-
-        // 랭킹 순으로 정렬
-        myRanks.sort((a, b) => a.user_rank - b.user_rank)
-
-        return res.json({
-            success: true,
-            items: myRanks,
-            total_ranked_spaces: myRanks.length
+        Object.keys(spaceMap).forEach(async(space) => {
+          // 이름이 없는 공간이면 -> 구글에 업로드된 공간이면 불러온 이름 추가
+          if (!spaceMap[space].name){
+            spaceMap[space].name = spaceNamesMap[space];
+          }
         });
+
+        const imagePromise = Object.keys(spaceMap).map(space_id => {
+          const ret = async () => {
+            // 사적 공간이거나 사진이 없는 공적 공간
+            if(!spacePhotos[space_id]){
+              const {data, error} = await supabaseAdmin.storage
+                .from(spaceMap[space_id].img_path.split('/').length > 2? 'study-photos':'wallpaper')
+                .createSignedUrl(spaceMap[space_id].img_path, Number(process.env.STUDY_PHOTO_URL_TTL_SECONDS || 86400));
+                
+              if (error) throw error;
+              return {space_id: space_id, img_url: data.signedUrl}
+            }else{
+              return {space_id: space_id, img_url: spacePhotos[space_id]}
+            }
+          }
+          return ret();
+        }
+      )
+      const result = await Promise.allSettled(imagePromise);
+      console.log(result);
+
+      result.forEach(item => {
+        if (item.status === 'fulfilled'){
+          console.log(item.value);
+          spaceMap[item.value.space_id].img_url = item.value.img_url;
+        }
+      })
+
+      return res.status(200).json({
+        success: true,
+        data: Object.values(spaceMap).map((space)=>{
+          return {
+            space_name: space.name,
+            my_study_count: space.visit_count,
+            my_total_minutes: space.total_duration,
+            space_image_url: space.img_url,
+        }}).sort((a, b) => b.my_study_count - a.my_study_count)
+      });
+          
+
     } catch (err) {
   console.error('에러 메시지:', err);
   return res.status(500).json({
@@ -393,14 +380,10 @@ router.get('/my/recent-spaces', verifySupabaseJWT, async (req, res) => {
   try {
     const userId = req.user.sub;
     const limit = 10; // 항상 10개 고정
-
-    // 먼저 study_record만 조회해서 디버깅
-    console.log('사용자 ID:', userId);
     
     const { data: studyRecords, error: studyError } = await supabase
       .from('study_record')
-      .select('id, space_id, start_time, duration, record_photos ( path ), study_record_mood_tags ( mood_tags ( mood_id ) )')
-      .eq('user_id', userId)
+      .select('id, space_id, start_time, duration, img_path, spaces( name )')
       .order('start_time', { ascending: false })
       .limit(limit)
       .setHeader('Authorization', req.headers.authorization);
@@ -411,7 +394,6 @@ router.get('/my/recent-spaces', verifySupabaseJWT, async (req, res) => {
     }
 
     console.log('study_record 결과:', studyRecords?.length || 0, '개');
-    console.log('space_id 샘플:', studyRecords?.slice(0, 3).map(r => r.space_id));
 
     if (!studyRecords || studyRecords.length === 0) {
       return res.json({
@@ -422,26 +404,22 @@ router.get('/my/recent-spaces', verifySupabaseJWT, async (req, res) => {
       });
     }
 
-    // 중복 제거된 space_id 추출
-    const uniqueSpaceIds = [...new Set(studyRecords.map(r => r.space_id))];
-    console.log('고유 공간 IDs:', uniqueSpaceIds);
-
-    const { data: spacesData, error: spacesError } = await supabase
-      .from('spaces')
-      .select('id, name')
-      .in('id', uniqueSpaceIds)
-      .setHeader('Authorization', req.headers.authorization);
-
-    if (spacesError) {
-      console.error('spaces 데이터 조회 에러:', spacesError);
-    }
-
-    console.log('spaces 테이블 결과:', spacesData?.length || 0, '개');
-
-    // studyRecords와 spacesData를 매칭하여 결과 생성
-    const spaceInfoMap = new Map();
-    (spacesData || []).forEach(space => {
-      spaceInfoMap.set(space.id, space);
+    // space_id -> 최근 공부 기록 매핑
+    // 해당 공간에 대한 기록 데이터가 있으면 삽입하지 않으므로 고유한 공간 추출
+    const spaceDetailMap = {};
+    studyRecords.forEach(rec => {
+      // space_id에 대한 데이터가 들어오지 않았다면 삽입
+      // 이미 있으면 skip
+      if (rec.space_id && rec.img_path && !spaceDetailMap[rec.space_id]) {
+        spaceDetailMap[rec.space_id] = {
+          space_id: rec.space_id,
+          img_path: rec.img_path,
+          // 공적 장소인 경우 이름이 없음. 구글에서 호출해야함
+          name: rec.spaces?.name || null,
+          start_time: rec.start_time,
+          duration: rec.duration
+        };
+      }
     });
 
     // 공간 이름 비동기 호출
@@ -451,7 +429,8 @@ router.get('/my/recent-spaces', verifySupabaseJWT, async (req, res) => {
         "X-Goog-FieldMask": "displayName",
     };
 
-    const spaceIdsToFetch = Array.from(uniqueSpaceIds).filter(id => !validate(id));
+    const spaceIdsToFetch = Array.from(Object.keys(spaceDetailMap)).filter(id => !validate(id));
+    const spaceIdsToFetchPhotos = Array.from(Object.keys(spaceDetailMap)).filter(id => spaceDetailMap[id]?.img_path === "general/Rectangle 34627910.png");
     const spaceNamePromises = spaceIdsToFetch.map(spaceId => {
       return fetch(
         `https://places.googleapis.com/v1/places/${spaceId}?languageCode=ko&regionCode=kr`, 
@@ -464,7 +443,6 @@ router.get('/my/recent-spaces', verifySupabaseJWT, async (req, res) => {
         return { spaceId, name: res.displayName.text };
       })
     });
-
     const spaceNamesArray = await Promise.allSettled(spaceNamePromises);
     const spaceNamesMap = {}
     spaceNamesArray.map(item => {
@@ -474,55 +452,45 @@ router.get('/my/recent-spaces', verifySupabaseJWT, async (req, res) => {
     });
     console.log('공간 이름 매핑:', spaceNamesMap);
 
-    const imageUrlMap = {};
-    await Promise.all(
-      (studyRecords || []).map(async (rec) => {
-        let signed = null;
+    const spaceImageUrls = await photoTools.getPhotoUrls(...spaceIdsToFetchPhotos);
 
-        // 업로드 사진 우선
-        const photoPaths = Array.isArray(rec?.record_photos)
-          ? rec.record_photos.map(p => p?.path).filter(Boolean)
-          : [];
-        for (const p of photoPaths) {
-          signed = await signStudyPhotoKeyMaybe(p);
-          if (signed) break;
-        }
+    const fetchImageUrlAndName = async (spaceDetail) => {
+      if(spaceDetail.name === null){
+        spaceDetail.name = spaceNamesMap[spaceDetail.space_id];
+      }
 
-        if (!signed) {
-          const moods = Array.isArray(rec?.study_record_mood_tags)
-            ? rec.study_record_mood_tags
-                .map(m => (m?.mood_tags?.mood_id || '').trim())
-                .filter(Boolean)
-            : [];
-          const { url } = await photoTools.getMoodWallpaper(moods || []);
-          signed = url || null;
-        }
-
-        imageUrlMap[rec.id] = signed;
-      })
-    );
-
-    const items = [];
-    for (const record of studyRecords) {
-      const kstDate = new Date(new Date(record.start_time).getTime() + 9 * 60 * 60 * 1000);
-      const spaceInfo = spaceInfoMap.get(record.space_id);
-      const wallpaperUrl = imageUrlMap[record.id] || null;
-
-      items.push({
-        space_id: record.space_id,
-        space_name: spaceNamesMap[record.space_id] || spaceInfo?.name || '이름 없음',
-        space_image_url: wallpaperUrl || null,
-        last_visit_date: kstDate.toISOString().split('T')[0],
-        last_visit_time: record.start_time,
-        duration: Number(record.duration || 0)
-      });
+      // 기본 배경에 구글 사진 있으면 구글 사진 넣음
+      if(spaceDetail.img_path === "general/Rectangle 34627910.png" && spaceImageUrls[spaceDetail.space_id]){
+        spaceDetail.img_url = spaceImageUrls[spaceDetail.space_id];
+      }else{
+        // 그 이외의 경우에는 db에 있는대로 넣음
+        const {data, error} = await supabaseAdmin.storage
+          .from(spaceDetail.img_path.split('/').length > 2? 'study-photos':'wallpaper')
+          .createSignedUrl(spaceDetail.img_path, Number(process.env.STUDY_PHOTO_URL_TTL_SECONDS || 86400));
+          
+        if (error) throw error;
+        spaceDetail.img_url = data.signedUrl
+      }
+      return spaceDetail;
     }
+
+    const fetchedSpaceDetails = await Promise.allSettled(Object.values(spaceDetailMap).map(fetchImageUrlAndName));
+    const items = fetchedSpaceDetails.filter(item => item.status === 'fulfilled').map(item => {
+      return {space_id: item.value.space_id,
+      space_name: item.value.name,
+      space_image_url: item.value.img_url,
+      last_visit_date: item.value.start_time.split('T')[0],
+      last_visit_time: item.value.start_time,
+      duration: item.value.duration
+      }
+    }).sort((a, b) => b.last_visit_date - a.last_visit_date);
+
 
     return res.json({
       success: true,
       items,
       total_count: items.length
-    });
+    })
 
   } catch (err) {
     console.error('최근 방문 공간 조회 상세 에러:', err);
