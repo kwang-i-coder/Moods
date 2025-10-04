@@ -355,30 +355,20 @@ async function buildRecordCardFromRow(row, authorization) {
   // 이미지
   let imageUrl = null;
   try {
-    let paths = Array.isArray(row.record_photos) ? row.record_photos.map(p => p?.path).filter(Boolean) : [];
+    const img_path = row.img_path || 'general/Rectangle 34627910.png';
 
-    if (paths.length === 0) {
-      const { data: photoRows, error: photoErr } = await supabaseAdmin
-        .from('record_photos')
-        .select('path')
-        .eq('record_id', row.id)
-        .order('created_at', { ascending: false })
-        .limit(5);
-      if (!photoErr && Array.isArray(photoRows)) {
-        paths = photoRows.map(r => r.path).filter(Boolean);
-      }
+
+    const {data, error: signedErr} = await supabaseAdmin
+        .storage
+        .from(img_path.split('/').length > 2 ? 'study-photos' : 'wallpaper')
+        .createSignedUrl(img_path, Number(process.env.STUDY_PHOTO_URL_TTL_SECONDS || 86400));
+    if (signedErr) {
+      console.error('기본 이미지 서명 URL 생성 실패:', signedErr);
+      imageUrl = null;
     }
-
-    for (const p of paths) {
-      imageUrl = await signStudyPhotoKeyMaybe(p, Number(process.env.STUDY_PHOTO_URL_TTL_SECONDS || 86400));
-      if (imageUrl) break;
-    }
-
-    if (!imageUrl) {
-      const { url: moodUrl } = await photoTools.getMoodWallpaper(moodList || []);
-      if (moodUrl) {
-        imageUrl = moodUrl;
-      }
+    const moodUrl = data.signedUrl;
+    if (moodUrl) {
+      imageUrl = moodUrl;
     }
   } catch (e) {
     console.error('이미지 URL 생성 실패:', e);
@@ -445,11 +435,12 @@ router.get("/records/calendar", async (req, res) => {
         const { data: records, error } = await supabase
             .from("study_record")
             .select(`
-              id, title, duration, start_time, end_time, goals, space_id,
+              id,
+              duration,
+              start_time,
+              space_id,
               record_photos:record_photos ( path ),
-              spaces:spaces ( id, name ),
-              record_emotions:record_emotions ( emotions:emotions ( id, name ) ),
-              record_moods:study_record_mood_tags ( mood_tags:mood_tags ( mood_id ) )
+              spaces:spaces ( id, name )
             `)
             .gte("start_time", startDate.toISOString())
             .lte("end_time", endDate.toISOString())
@@ -461,15 +452,75 @@ router.get("/records/calendar", async (req, res) => {
         }
 
         const recordsByDay = {};
-        for (let i = 1; i <= 31; i++) {
-            recordsByDay[i] = [];
+        const lastDay = new Date(Date.UTC(parsedYear, parsedMonth, 0)).getUTCDate();
+        for (let i = 1; i <= lastDay; i++) {
+          recordsByDay[i] = { count: 0, records: [] };
         }
 
         for (const record of (records || [])) {
             const day = new Date(record.start_time).getUTCDate();
-            const card = await buildRecordCardFromRow(record, req.headers.authorization);
-            recordsByDay[day].push(card);
+
+            const total_time = (typeof record.duration === 'number') ? record.duration : null;
+
+            let spaceName = (record.spaces && typeof record.spaces.name === 'string' && record.spaces.name.trim() !== '')
+              ? record.spaces.name
+              : null;
+
+            const spaceId = record.spaces?.id ?? record.space_id ?? null;
+            if (!spaceName && spaceId && !isValidUuidV4(spaceId)) {
+              try {
+                const googleApiHeaders = {
+                  "Content-Type": "application/json",
+                  "X-Goog-Api-Key": process.env.GOOGLE_API_KEY,
+                  "X-Goog-FieldMask": "displayName",
+                };
+                const placeRes = await fetch(
+                  `https://places.googleapis.com/v1/places/${spaceId}?languageCode=ko&regionCode=kr`,
+                  { method: 'GET', headers: googleApiHeaders }
+                );
+                if (placeRes.ok) {
+                  const placeJson = await placeRes.json();
+                  if (placeJson?.displayName?.text) {
+                    spaceName = placeJson.displayName.text;
+                  }
+                }
+              } catch (apiErr) {
+                console.error('Google Places API 호출 실패 (calendar):', apiErr);
+              }
+            }
+
+            let imageUrl = null;
+            try {
+                let paths = Array.isArray(record.record_photos)
+                  ? record.record_photos.map(p => p?.path).filter(Boolean)
+                  : [];
+
+                if (paths.length > 0) {
+                  for (const p of paths) {
+                    imageUrl = await signStudyPhotoKeyMaybe(p, Number(process.env.STUDY_PHOTO_URL_TTL_SECONDS || 86400));
+                    if (imageUrl) break;
+                  }
+                }
+
+                if (!imageUrl) {
+                  const { url: moodUrl } = await photoTools.getMoodWallpaper([]);
+                  if (moodUrl) imageUrl = moodUrl;
+                }
+            } catch (e) {
+                console.error('이미지 URL 생성 실패 (calendar):', e);
+            }
+
+            const card = {
+                id: record.id,
+                duration: total_time,
+                space_name: spaceName ?? null,
+                space_image_url: imageUrl ?? null
+            };
+            recordsByDay[day].records.push(card);
+            recordsByDay[day].count += 1;
         }
+
+
 
         res.status(200).json({
             message: "기록 캘린더 데이터를 성공적으로 불러왔습니다.",
